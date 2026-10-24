@@ -1,0 +1,7 @@
+name: "BuildWheel"
+displayName: "Build Wheel"
+author: "[#666999]Name[#CC0000]less[yellow]Ways"
+description: "Настраиваемое колесо быстрого выбора для строительства."
+version: "1.0"
+minGameVersion: "136"
+hidden: true

@@ -1,0 +1,176 @@
+// BuildWheel
+// Этап 1: открытие колеса выбора в положении курсора.
+// Пока реализуются пункты 1 и 1.2 — после проверки в игре их можно отметить *.
+
+// Показывает, открыто ли колесо в данный момент.
+var wheelOpen = false;
+
+// Номер открытого колеса: от 0 до 9.
+var activeWheelNumber = -1;
+
+// Диаметр колеса в единицах интерфейса.
+var wheelDiameter = 180;
+
+// ==================================================
+// 1.1) Создание и отображение колеса
+// ==================================================
+// ClientLoadEvent вызывается после загрузки клиентской части игры.
+// Создаём элемент интерфейса тогда, когда сцена уже доступна.
+Events.on(ClientLoadEvent, () => {
+
+	// ==================
+    // 1.0) Шаблон колеса
+    // ==================
+    // extend наследование создаёт объект класса Element с переопределённым методом draw().
+    // Element — объект, элемент интерфейса Arc, который можно добавить в сцену.
+    var wheel = extend(Element, {
+
+		//Переопределяем функцию draw у Element
+        draw: function() {
+
+            // Предохранитель от срабатывания повторно или в главном меню
+            if (!wheelOpen || !Vars.state.isGame()) {
+                return;
+            }
+
+            var radius = this.width / 2;
+
+            // Полупрозрачная белая заливка.
+			//В будущем настройка-замена через .color = Color.valueOf("ff0000");
+            Draw.color(Color.white);
+            Draw.alpha(0.22);
+            Fill.circle(radius, radius, radius);
+
+            // Контур, чтобы круг был различим на фоне игрового мира.
+            Draw.color(Color.white);
+            Draw.alpha(0.70);
+            Lines.stroke(2);
+            Lines.circle(radius, radius, radius - 1);
+
+            // Сбрасываем состояние отрисовки, чтобы оно не влияло
+            // на последующие элементы интерфейса.
+            Draw.reset();
+        }
+    });
+
+    // Размер у будущего объекта в соответствии с настройкой диаметра колеса.
+    wheel.setSize(wheelDiameter, wheelDiameter);
+
+    // Колесо пока не должно перехватывать клики мыши.
+    wheel.touchable = Touchable.disabled;
+
+    // Добавляем элемент в корневую группу элементов интерфейса.
+    // Это позволяет рисовать его поверх игрового мира.
+    Core.scene.root.addChild(wheel);
+
+
+    // ====================
+    // 1.2) Открытие колеса
+    // ====================
+    // ===========================
+    // 1.2) Событийная обработка
+    // ===========================
+
+    // InputAdapter позволяет обрабатывать события ввода,
+    // не проверяя состояние клавиатуры каждый кадр.
+    //
+    // keyDown вызывается при нажатии клавиши.
+    // Возвращаем false, чтобы не блокировать обработку
+    // этого события другими обработчиками игры.
+
+    Core.input.addProcessor(extend(InputProcessor, {
+
+        keyDown: function(key) {
+
+			//ПРЕДОХРАНИТЕЛИ		
+			// В главном меню колесо не открывается.
+			// Сбрасываем состояние, чтобы старое колесо не появлялось
+			// неожиданно после начала другой игры.
+			if (!Vars.state.isGame()) {
+				wheelOpen = false;
+				activeWheelNumber = -1; //в теории бесполезно, так как номер определяется цифрой
+				return;
+			}
+
+			// Временно разрешаем открытие только во время активной игры.
+			// На паузе новые колёса открыть нельзя.
+			if (!Vars.state.isPlaying()) {
+				return;
+			}
+
+			// Не реагируем на сочетание клавиш, если открыт диалог
+			// или клавиатурный фокус принадлежит полю ввода.
+			if (Core.scene.hasDialog() || Core.scene.hasKeyboard()) {
+				return;
+			}
+
+			//НАЖАТИЕ
+			// Ловим зажатие Shift
+			if (!shiftPressed) {
+				return;
+			}
+
+			// Определяем какой Shift нажат - левый или правый
+			var shiftPressed =
+				Core.input.keyDown(KeyCode.shiftLeft)
+				|| Core.input.keyDown(KeyCode.shiftRight);
+
+			// Не нажатая клавиша по дефолту
+			var pressedNumber = -1; //раз пофиг на сохранение, можно поставить перед 'Ловим зажатие Shift'
+
+			// Ловим зажатую клавишу под номером
+			if (Core.input.keyTap(KeyCode.num1)) {
+				pressedNumber = 1;
+			} else if (Core.input.keyTap(KeyCode.num2)) {
+				pressedNumber = 2;
+			} else if (Core.input.keyTap(KeyCode.num3)) {
+				pressedNumber = 3;
+			} else if (Core.input.keyTap(KeyCode.num4)) {
+				pressedNumber = 4;
+			} else if (Core.input.keyTap(KeyCode.num5)) {
+				pressedNumber = 5;
+			} else if (Core.input.keyTap(KeyCode.num6)) {
+				pressedNumber = 6;
+			} else if (Core.input.keyTap(KeyCode.num7)) {
+				pressedNumber = 7;
+			} else if (Core.input.keyTap(KeyCode.num8)) {
+				pressedNumber = 8;
+			} else if (Core.input.keyTap(KeyCode.num9)) {
+				pressedNumber = 9;
+			} else if (Core.input.keyTap(KeyCode.num0)) {
+				pressedNumber = 0;
+			}
+
+			// Если номерная клавиша не была нажата, ничего не делаем.
+			if (pressedNumber == -1) {
+				return;
+			}
+
+			// Запоминаем номер выбранного колеса.
+			activeWheelNumber = pressedNumber;
+
+			// Отмечаем колесо как открытое — draw() начнёт его рисовать.
+			wheelOpen = true;
+
+
+			//КООРДИНАТЫ ПОЛОЖЕНИЯ
+
+			// Получаем текущие координаты мыши в координатах интерфейса.
+			var mouseX = Core.input.mouseX();
+			var mouseY = Core.input.mouseY();
+
+			// Центрируем колесо на курсоре.
+			wheel.setPosition(
+				mouseX - wheelDiameter / 2,
+				mouseY - wheelDiameter / 2
+			);
+
+			// Перемещаем элемент наверх списка элементов сцены среди всех в группе, поверх остальных элементов интерфейса.
+			wheel.toFront();
+			
+            // false означает, что мы не поглощаем событие:
+            // игра также может обработать нажатие клавиши.
+            return false;
+		}
+    }));
+});
