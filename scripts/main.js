@@ -178,6 +178,50 @@ Events.on(ClientLoadEvent, () => {
         pendingSelection = null; // Отменяет ещё не выполненный запрос выбора.
     }
 
+    //==============================================================
+    // 2.4) Закрытие при вызове другого окна или выделения области.
+    //==============================================================
+    // Сравниваем клавишу с совпадающей функцией из binding.value.key при каждом нажатии клаваиши или пкм:
+    // Ищет через варианты назначенные в меню управления (KeyCode) Сделано с целью внесения в список сторонних модификаций
+    var closingBindings = [
+        Binding.menu, Binding.minimap, Binding.schematicMenu,
+        Binding.research, Binding.planetMap, Binding.blockInfo,
+        Binding.schematicSelect, Binding.rebuildSelect
+    ];
+
+    function closeForGameAction(key) {
+        if (key == KeyCode.unset) return false;
+        for (var i = 0; i < closingBindings.length; i++) {
+            var binding = closingBindings[i];
+            if (binding.value != null && binding.value.key == key) {
+                closeWheel();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function wheelInputBlocked() { // Нельзя снова открыть колесо, пока удерживается режим работы с областью.
+        return Core.scene.hasDialog() || Core.scene.hasKeyboard()
+            || Core.input.keyDown(Binding.schematicSelect)
+            || Core.input.keyDown(Binding.rebuildSelect);
+    }
+
+    // Сцена сообщает о получении клавиатурного/scroll-фокуса любым её потомком.
+    // Это охватывает стандартные Dialog/BaseDialog, большую карту, поля ввода
+    // и обычные диалоги модов, даже когда их открыли программно, а не клавишей.
+    // Слушатель ничего не поглощает: новое окно получает фокус и ввод как обычно.
+    Core.scene.root.addCaptureListener(extend(FocusListener, {
+        keyboardFocusChanged: function(event, actor, focused) {
+            if (focused) closeWheel();
+        },
+        scrollFocusChanged: function(event, actor, focused) {
+            if (focused) closeWheel();
+        }
+    }));
+    //==============================================================
+    //==============================================================
+
     // Ставим одну задачу только после выбора непустого сектора.
     // В настольной версии очередь post выполняется после обновления игры и UI:
     // горячая клавиша открытия уже не сможет перезаписать наш выбор в этом кадре.
@@ -192,7 +236,8 @@ Events.on(ClientLoadEvent, () => {
             if (pendingSelection !== selection) return;
             pendingSelection = null;
             // Пока задача ждала, мир или доступность блока могли измениться.
-            if (!Vars.state.isGame() || !canSelectBlock(selection.block)) return;
+            if (!Vars.state.isGame() || wheelInputBlocked()
+                || !canSelectBlock(selection.block)) return;
 
             // 2.3) Это штатное поле выбранного строительного блока.
             // Выбор выходит из командования/схемы и режима сноса.
@@ -217,8 +262,11 @@ Events.on(ClientLoadEvent, () => {
     // InputProcessor — интерфейс Arc.
     Core.input.getInputMultiplexer().addProcessor(0, extend(InputProcessor, {//getInputMultiplexer() отбирает приоритет у keyDown, keyTap и keyRelease - риск при других модах
         keyDown: function(key) {
-            if (!Vars.state.isPlaying()) return false; // Открываем только в активной - ни пауза, ни меню, ни загрузка.
-            if (Core.scene.hasDialog() || Core.scene.hasKeyboard()) return false; // В диалоге, чате или поле ввода сочетание не открывает колесо.
+            // 2.4) Сначала закрываем колесо и пропускаем клавишу дальше в игру.
+            // Это должно работать и без Shift, и при открытии меню на паузе.
+            if (closeForGameAction(key)) return false;
+            if (!Vars.state.isGame()) return false; // Разрешаем открытие в игре, включая паузу; в главном меню — нельзя.
+            if (wheelInputBlocked()) return false; // 2.4) Диалог, поле ввода или удерживаемое выделение области.
 
             //Сомнительно, но не даёт активироваться при удержанных заранее ЛКМ и ПКМ (пойдёт в доп. настройки!)
             if (capturedLeft || capturedRight
@@ -261,13 +309,16 @@ Events.on(ClientLoadEvent, () => {
         //==============================================================
         //Обрабатываем именно нажатие, а не отпускание мыши.
         touchDown: function(screenX, screenY, pointer, button) {
+            // 2.4) Действие из списка также может быть назначено на кнопку мыши.
+            // Уже захваченный жест по-прежнему удерживаем до его отпускания.
+            if (!capturedLeft && !capturedRight && closeForGameAction(button)) return false;
             if (button != KeyCode.mouseLeft && button != KeyCode.mouseRight) return false;
 
             // Дополнительную кнопку во время уже захваченного жеста тоже
             // поглощаем, чтобы закрытие не превратилось в действие игры.
             if (!capturedLeft && !capturedRight) {
                 if (!wheelOpen) return false;
-                if (!Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) {
+                if (!Vars.state.isGame() || wheelInputBlocked()) {
                     closeWheel();
                     return false; // Открытый диалог должен получать свои клики.
                 }
