@@ -34,7 +34,7 @@ Events.on(ClientLoadEvent, () => {
     // Иначе игра получит отпускание без нажатия и может завершить свой жест.
     var capturedLeft = false;
     var capturedRight = false;
-    var pendingBlock = null; // Выбор, ожидающий завершения горячих клавиш кадра.
+    var pendingSelection = null; // Запрос выбора, ожидающий выполнения в очереди приложения.
 
     // Определяем наличие курсора на одном из секторов
     // Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
@@ -128,7 +128,7 @@ Events.on(ClientLoadEvent, () => {
                     // Сохраняем пропорции исходной иконки в квадрате iconSize.
                     var iconScale = iconSize / Math.max(icon.width, icon.height);
                     Draw.color(Color.white);
-                    Draw.alpha(canSelectBlock(block) ? 1 : 0.30);
+                    Draw.alpha(canSelectBlock(block) ? 1 : 0.30);// Тускнеет, если блок недоступен.
                     Draw.rect(icon,
                         centerX + Math.sin(direction) * radius * 0.64,
                         centerY + Math.cos(direction) * radius * 0.64,
@@ -167,34 +167,35 @@ Events.on(ClientLoadEvent, () => {
         wheelOpen = false;
         activeWheelNumber = -1;
         wheel.visible = false;
-        pendingBlock = null;
+        pendingSelection = null; // Отменяет ещё не выполненный запрос выбора.
     }
 
-    // Если открыть колесо и щёлкнуть в том же кадре, строительное меню ещё
-    // обработает нажатую цифру. Применяем наш выбор после исчезновения keyTap,
-    // чтобы штатная горячая клавиша не перезаписала выбранный через колесо блок.
-    Events.run(Trigger.update, () => {
-        if (pendingBlock == null) return;
-        if (!Vars.state.isGame()) {
-            pendingBlock = null;
-            return;
-        }
-        for (var i = 0; i < numberKeys.length; i++) {
-            if (Core.input.keyTap(numberKeys[i])) return;
-        }
-        var block = pendingBlock;
-        pendingBlock = null;
-        if (!canSelectBlock(block)) return;
+    // Ставим одну задачу только после выбора непустого сектора.
+    // В настольной версии очередь post выполняется после обновления игры и UI:
+    // горячая клавиша открытия уже не сможет перезаписать наш выбор в этом кадре.
+    function queueBlockSelection(block) {
+        if (block == null) return;
+        // Каждый запрос — отдельный объект, даже при выборе того же блока.
+        // Это позволяет отличить отменённую задачу от более нового выбора.
+        var selection = {block: block};
+        pendingSelection = selection;
+        Core.app.post(() => {
+            // Задача остаётся в очереди после отмены, но ничего не делает.
+            if (pendingSelection !== selection) return;
+            pendingSelection = null;
+            // Пока задача ждала, мир или доступность блока могли измениться.
+            if (!Vars.state.isGame() || !canSelectBlock(selection.block)) return;
 
-        // 2.3) Это штатное поле выбранного строительного блока.
-        // Выбор выходит из командования/схемы и режима сноса. - надо тестить!
-        var input = Vars.control.input;
-        input.commandMode = false;
-        input.selectPlans.clear();
-        input.linePlans.clear();
-        if (input instanceof DesktopInput) input.mode = PlaceMode.none;
-        input.block = block;
-    });
+            // 2.3) Это штатное поле выбранного строительного блока.
+            // Выбор выходит из командования/схемы и режима сноса.
+            var input = Vars.control.input;
+            input.commandMode = false;
+            input.selectPlans.clear();
+            input.linePlans.clear();
+            if (input instanceof DesktopInput) input.mode = PlaceMode.none;
+            input.block = selection.block;
+        });
+    }
 
     Events.on(StateChangeEvent, event => {
         if (event.to == GameState.State.menu) closeWheel();
@@ -278,7 +279,7 @@ Events.on(ClientLoadEvent, () => {
                 // 2.2) ПКМ — отмена в любом месте. После выбора также закрываем.
                 // Пустой/недоступный слот не сбрасывает прежний строительный блок.
                 closeWheel();
-                pendingBlock = selectedBlock;
+                queueBlockSelection(selectedBlock);
             }
             // Исходное событие не доходит до сцены. Обновляем только её
             // координаты мыши, чтобы наведение на HUD не осталось в старой точке.
