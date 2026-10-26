@@ -3,6 +3,9 @@
 // API: https://mindustrygame.github.io/docs/
 // Исходники: https://github.com/Anuken/Arc/tree/master/arc-core/src/arc
 
+// 3) require выполняется при загрузке скрипта; само меню создаётся после ClientLoadEvent.
+var menuModule = require("menu");
+
 // ClientLoadEvent вызывается после загрузки клиентской части игры
 // когда клиентский интерфейс уже создан.
 Events.on(ClientLoadEvent, () => {
@@ -131,7 +134,7 @@ Events.on(ClientLoadEvent, () => {
                 if (block != null) {
                     var direction = sector * sectorAngle * Math.PI / 180;
                     var icon = block.uiIcon;
-                    var iconSize = radius * 0.28;
+                    var iconSize = radius * 0.28 * settingsMenu.getIconScale(activeWheelNumber, sector);
                     // Сохраняем пропорции исходной иконки в квадрате iconSize.
                     var iconScale = iconSize / Math.max(icon.width, icon.height);
                     Draw.color(Color.white);
@@ -207,6 +210,19 @@ Events.on(ClientLoadEvent, () => {
             || Core.input.keyDown(Binding.rebuildSelect);
     }
 
+    // 3) Меню работает со слотами через явные функции. Данные колеса остаются
+    // здесь, интерфейс и сохранение настроек находятся в модуле menu.js.
+    var settingsMenu = menuModule.create({
+        getBlock: function(w, s) { return wheelSlots[w][s]; },
+        setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
+        drawSector: drawSector,
+        innerRadiusRatio: innerRadiusRatio,
+        isWheelOpen: function() { return wheelOpen; },
+        getWheelNumber: function() { return activeWheelNumber; },
+        closeWheel: closeWheel,
+        isInputBlocked: wheelInputBlocked
+    });
+
     // Сцена сообщает о получении клавиатурного/scroll-фокуса любым её потомком.
     // Это охватывает стандартные Dialog/BaseDialog, большую карту, поля ввода
     // и обычные диалоги модов, даже когда их открыли программно, а не клавишей.
@@ -262,6 +278,8 @@ Events.on(ClientLoadEvent, () => {
     // InputProcessor — интерфейс Arc.
     Core.input.getInputMultiplexer().addProcessor(0, extend(InputProcessor, {//getInputMultiplexer() отбирает приоритет у keyDown, keyTap и keyRelease - риск при других модах
         keyDown: function(key) {
+            // 3) Настройки и их клавиши обрабатываются до игровых действий.
+            if (settingsMenu.handleKeyDown(key)) return true;
             // 2.4) Сначала закрываем колесо и пропускаем клавишу дальше в игру.
             // Это должно работать и без Shift, и при открытии меню на паузе.
             if (closeForGameAction(key)) return false;
@@ -304,11 +322,17 @@ Events.on(ClientLoadEvent, () => {
             return false;
         },
 
+        // 3) Отпускания клавиш меню должны обрабатываться и при открытом диалоге.
+        keyUp: function(key) {
+            return settingsMenu.handleKeyUp(key);
+        },
+
         //==============================================================
         // 2.1–2.3) Обработка кликов
         //==============================================================
         //Обрабатываем именно нажатие, а не отпускание мыши.
         touchDown: function(screenX, screenY, pointer, button) {
+            if (settingsMenu.handleKeyDown(button)) return true; // 3.1) Вызов меню может быть назначен на мышь.
             // 2.4) Действие из списка также может быть назначено на кнопку мыши.
             // Уже захваченный жест по-прежнему удерживаем до его отпускания.
             if (!capturedLeft && !capturedRight && closeForGameAction(button)) return false;
@@ -348,6 +372,7 @@ Events.on(ClientLoadEvent, () => {
         },
 
         touchUp: function(screenX, screenY, pointer, button) {
+            if (settingsMenu.handleKeyUp(button)) return true;
             if (button == KeyCode.mouseLeft && capturedLeft) {
                 capturedLeft = false;
                 Core.scene.mouseMoved(screenX, screenY);
