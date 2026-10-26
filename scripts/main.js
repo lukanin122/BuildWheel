@@ -52,9 +52,14 @@ Events.on(ClientLoadEvent, () => {
         return Math.floor((angle + sectorAngle / 2) / sectorAngle) % 8; //возвращает сектор 0–7 или -1. Половина угла сектора плюсуется для отсчёта ровно по северу сектора.
     }
 
-    function canSelectBlock(block) { // Проверяем доступность для строительства так же, как строительное меню игры.
-        return block != null && block.placeablePlayer && block.isPlaceable()
-            && block.unlockedNowHost() && block.environmentBuildable();
+    function canSelectBlock(block) {
+        // Проверяем именно возможность ВЫБОРА, как PlacementFragment игры.
+        // isPlaceable() сюда не входит: видимый запрещённый блок можно выбрать
+        // для предпросмотра, хотя построить его игра не разрешит.
+        // Запасы ресурсов также не ограничивают выбор и предпросмотр.
+        return block != null && block.isVisible() && block.placeablePlayer
+            && block.unlockedNowHost() && block.environmentBuildable()
+            && block.supportsEnv(Vars.state.rules.env);
     }
 
     // Рисуем подсветку целевого сектора шестью небольшими четырёхугольниками.
@@ -76,7 +81,9 @@ Events.on(ClientLoadEvent, () => {
         }
     }
 
-    // 1) Создаём объект wheel - полупрозрачный шаблон колеса.
+    //==============================================================
+    // 1) Создаём объект wheel - полупрозрачный шаблон колеса выбора.
+    //==============================================================
     // extend создаёт наследника Element (элемент интерфейса Arc) и переопределяет его метод draw().
     var wheel = extend(Element, {
         draw: function() {
@@ -128,7 +135,9 @@ Events.on(ClientLoadEvent, () => {
                     // Сохраняем пропорции исходной иконки в квадрате iconSize.
                     var iconScale = iconSize / Math.max(icon.width, icon.height);
                     Draw.color(Color.white);
-                    Draw.alpha(canSelectBlock(block) ? 1 : 0.30);// Тускнеет, если блок недоступен.
+                    // Доступность выбора и возможность постройки — разные вещи:
+                    // тусклый запрещённый блок остаётся выбираемым, как в меню игры.
+                    Draw.alpha(canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30);
                     Draw.rect(icon,
                         centerX + Math.sin(direction) * radius * 0.64,
                         centerY + Math.cos(direction) * radius * 0.64,
@@ -150,8 +159,7 @@ Events.on(ClientLoadEvent, () => {
         // Это сообщает сцене, что курсор над UI, и блокирует игровое наведение.
         // x/y здесь локальные; выбор сектора отдельно получает координаты сцены.
         hit: function(x, y, touchable) {
-            if (!wheelOpen || !Vars.state.isGame()
-                || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return null;
+            if (!wheelOpen || !Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return null;
             if (touchable && this.touchable != Touchable.enabled) return null;
             return this;
         }
@@ -203,15 +211,16 @@ Events.on(ClientLoadEvent, () => {
 
     Events.on(ResetEvent, () => closeWheel()); // Сброс мира - сброс колеса
 
-
-    // 1.2) Shift + цифра; отрисовка выбранного колеса поверх интерфейса по координатам курсора.
+    //==============================================================
+    // 1.2) Shift + цифра - отрисовка выбранного колеса поверх интерфейса по координатам курсора.
+    //==============================================================
     // InputProcessor — интерфейс Arc.
     Core.input.getInputMultiplexer().addProcessor(0, extend(InputProcessor, {//getInputMultiplexer() отбирает приоритет у keyDown, keyTap и keyRelease - риск при других модах
         keyDown: function(key) {
             if (!Vars.state.isPlaying()) return false; // Открываем только в активной - ни пауза, ни меню, ни загрузка.
             if (Core.scene.hasDialog() || Core.scene.hasKeyboard()) return false; // В диалоге, чате или поле ввода сочетание не открывает колесо.
 
-            //Сомнительно, но не даёт активироваться при удержанных заранее ЛКМ и ПКМ (в доп. настройки пойдёт!)
+            //Сомнительно, но не даёт активироваться при удержанных заранее ЛКМ и ПКМ (пойдёт в доп. настройки!)
             if (capturedLeft || capturedRight
                 || Core.input.keyDown(KeyCode.mouseLeft)
                 || Core.input.keyDown(KeyCode.mouseRight)) return false;
