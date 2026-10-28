@@ -223,6 +223,7 @@ Events.on(ClientLoadEvent, () => {
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
         drawSector: drawSector,
         innerRadiusRatio: innerRadiusRatio,
+        getWheelDiameter: function() { return wheel.getWidth(); }, // Манекен берёт фактический диаметр колеса выбора.
         closeWheel: closeWheel
     });
 

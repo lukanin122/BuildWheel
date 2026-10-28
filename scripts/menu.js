@@ -33,7 +33,7 @@ exports.create = function(api) {
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
     var categoryButtons = []; // Такие же записи для вкладок категорий.
     var gridColumns = 1;
-    var previewSize = 0; // Размер манекена в координатах сцены; ниже он рассчитывается из размеров экрана.
+    var previewSize = 0; // Диаметр манекена в координатах сцены; получаем от игрового колеса в main.js.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
 
     // ------------------------------------------------------------
@@ -99,6 +99,8 @@ exports.create = function(api) {
             ? directionNames[editedSector] + ": " + (block == null ? "пустой слот" : String(block.localizedName))
             : "Выберите сектор на колесе справа"); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
+        scaleSlider.visible = selected; // Без выбранного сектора ползунок полностью скрыт.
+        scaleLabel.visible = selected; // Подпись с процентом показываем вместе с ползунком.
         scaleSlider.setDisabled(!selected); // Разблокировка ползунка размера иконки при наличии 'зелёного' сектора.
         scaleSlider.setValue(selected ? Math.round(getIconScale(editedWheel, editedSector) * 100) : 100, false); // размер в %, таблица iconScales — в коэффициентах.
         scaleLabel.setText("Размер иконки: " + Math.round(scaleSlider.getValue()) + "%"); //оглавление числа
@@ -280,10 +282,10 @@ exports.create = function(api) {
         var screenHeight = Core.scene.getHeight() / Scl.scl();// размеры сцены в UI-единицы, сохраняя доли экрана при любом масштабе UI.
         var contentWidth = screenWidth * 0.92; // Всё содержимое занимает 92% ширины экрана.
         var listWidth = contentWidth * 0.55; // 55% ширины отводим левой части.
-        var rightWidth = contentWidth * 0.40; // 40% ширины — правой; оставшаяся ширина даёт место для зазора по середине.
+        previewSize = api.getWheelDiameter(); // Тот же диаметр, что у игрового колеса; от размеров окна не зависит.
+        var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
+        var rightWidth = Math.max(contentWidth * 0.40, previewUiSize + 36); // Не меньше манекена плюс ползунок шириной 28 и отступ 8.
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
-        var previewUiSize = Math.max(60, Math.min(rightWidth - 44, screenHeight * 0.40)); //размер окна превью равным 40% от высоты экрана, но если экран слишком узкий — сжимает его под ширину правой панели, и при любых условиях не дает ему стать меньше 60 единиц.
-        previewSize = Scl.scl(previewUiSize); // Element.setSize использует реальные координаты сцены, поэтому применяем масштаб здесь.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
         // ЛЕВАЯ ЧАСТЬ: СТРОКА ПОИСКА
@@ -364,14 +366,14 @@ exports.create = function(api) {
             scaleLabel.setText("Размер иконки: " + Math.round(value) + "%");
             saveSlot(); // Обновляем данные Core.settings в памяти; файл здесь ещё не записывается.
         });
-        editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8);//ширина 28 пикселей, высота по % настройкам меню, отступ справа в 8 пикселей
-        editor.add(createPreview()).size(previewUiSize);//отображает манекен колеса с размером равным previewUiSize... фигня, надо задать от оригинала в main.js!
+        editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8); // Ползунок по высоте равен манекену; ширина и отступ заданы в UI-единицах.
+        editor.add(createPreview()).size(previewUiSize); // После масштабирования Cell размер совпадёт с диаметром игрового колеса.
         right.add(editor).top();
         body.add(right).width(rightWidth).padLeft(12).top();//добавляем панель с отступом слева в 12 пикселей
 
 
         var contentPane = new ScrollPane(body, Styles.defaultPane); //помещаем всё меню настроек в контейнер прокрутки, защищая от обрезки при малом разрешении
-        contentPane.setScrollingDisabled(true, false);
+        contentPane.setScrollingDisabled(false, false); // На узком окне прокручиваем содержимое и по горизонтали, сохраняя размер манекена.
         contentPane.setFadeScrollBars(false);
         dialog.cont.add(contentPane).width(contentWidth).growY().minHeight(0); // В наше Меню контейнер прокрутки: Заполняем оставшуюся высоту диалога; minHeight(0) разрешает сжатие с прокруткой.
         rebuildGrid();
