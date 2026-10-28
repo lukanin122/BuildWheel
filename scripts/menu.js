@@ -20,7 +20,7 @@ exports.create = function(api) {
     var settingsChanged = false; // Условие вынуждающее к записи данных на диск.
 
     // Локальное состояние редактора не меняет номер игрового колеса.
-    var editedWheel = 0; // Какое колесо сейчас редактируем в манекене.
+    var editedWheel = 1; // Начинаем с колеса 1; а 10-ый номер является 0
     var editedSector = -1; // Редактируемый 'зелёный' сектор 0–7, дефолт -1
     var category = null; // null — вкладка категории «Всё», без фильтра по типам блоков. Она выбрана изначально.
     var searchText = ""; // Сохраняем запрос, чтобы восстановить поле после изменения размера окна.
@@ -305,6 +305,52 @@ exports.create = function(api) {
         if (dialog.isShown()) Core.scene.setScrollFocus(blockPane);
     }
 
+    // Собственный стиль для каждого слайдера: общий defaultSlider игры не меняем. (Нафига сделано? по приколу)
+    // Подгоняем толщину бегунка и совмещаем его центр с дорожкой после округления Arc.
+    function createSliderStyle(vertical, fallbackWidth) {
+        var original = Styles.defaultSlider;
+        function fitKnob(drawable) {
+            if (drawable == null) return null;
+            var fitted = extend(BaseDrawable, {
+                getMinWidth: function() {
+                    if (vertical) return drawable.getMinWidth() + Scl.scl(1); // Вертикальный бегунок делаем чуть шире.
+                    // Arc использует minWidth рисунка как фактическую ширину бегунка.
+                    // Читаем размер самого виджета после раскладки: одно деление из десяти.
+                    var width = wheelSlider == null ? fallbackWidth : wheelSlider.getWidth();
+                    return width / wheelCount;
+                },
+                draw: function(x, y, width, height) {
+                    var slider = vertical ? scaleSlider : wheelSlider;
+                    var background = slider.isDisabled() && original.disabledBackground != null
+                        ? original.disabledBackground : original.background;
+                    if (background != null) {
+                        // У вертикальной дорожки Arc округляет начало и ширину отдельно.
+                        if (vertical) {
+                            var trackWidth = background.getMinWidth();
+                            x = Math.round(slider.x + (slider.getWidth() - trackWidth) / 2)
+                                + (Math.round(trackWidth) - width) / 2;
+                        } else {
+                            // Горизонтальная дорожка занимает всю высоту виджета, без округления.
+                            y = slider.y + (slider.getHeight() - height) / 2;
+                        }
+                    }
+                    drawable.draw(x, y, width, height); // Рисунок и цвета игры сохраняем, меняем только его размеры.
+                }
+            });
+            fitted.setMinHeight(vertical ? drawable.getMinHeight() : Scl.scl(19)); // Было 18; дополнительная единица убирает недостаток толщины.
+            return fitted;
+        }
+
+        var style = new Slider.SliderStyle();
+        style.background = original.background;
+        style.disabledBackground = original.disabledBackground;
+        style.knob = fitKnob(original.knob);
+        style.knobOver = fitKnob(original.knobOver);
+        style.knobDown = fitKnob(original.knobDown);
+        style.disabledKnob = fitKnob(original.disabledKnob);
+        return style;
+    }
+
     // ------------------------------------------------------------
     // ПОСТРОЕНИЕ ОКНА НАСТРОЕК
     // ------------------------------------------------------------
@@ -318,7 +364,7 @@ exports.create = function(api) {
         var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
         previewSize = api.getWheelDiameter(); // Тот же диаметр, что у игрового колеса; от размеров окна не зависит.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
-        var rightWidth = Math.max(contentWidth * 0.50, previewUiSize + 36); // 50% или не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
+        var rightWidth = Math.max(contentWidth * 0.45, previewUiSize + 36); // 45% или не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
@@ -372,11 +418,11 @@ exports.create = function(api) {
         // ПРАВАЯ ЧАСТЬ: ПОЛЗУНОК ВЫБОРА ВКЛАДКИ КОЛЕСА ВЫБОРА У МАНЕКЕНА
         wheelLabel = right.add("Колесо " + editedWheel).growX().get(); //Показ номера активного макета колеса на всю ширину, через Label для изменений
         right.row();
-        wheelSlider = new Slider(0, 9, 1, false); // Диапазон 0–9, шаг 1; false — горизонтальная ориентация.
+        wheelSlider = new Slider(1, wheelCount, 1, false, createSliderStyle(false, Scl.scl(rightWidth))); // Позиции 1–10 отображают колёса 1–9, 0; стиль задаёт низкий широкий бегунок.
         wheelSlider.name = "buildwheel-wheel-number";
-        wheelSlider.setValue(editedWheel, false); // Начальное значение без запуска обработчика moved.
+        wheelSlider.setValue(editedWheel == 0 ? wheelCount : editedWheel, false); // Колесо 0 показываем в последней позиции 10, без запуска moved.
         wheelSlider.moved(value => {//Callback на постоянное выполнение при сдвиге ползунка
-            editedWheel = Math.round(value); // Значение ползунка становится редактируемым номером колеса.
+            editedWheel = Math.round(value) % wheelCount; // Позиции 1–9 сохраняют номер; позиция 10 превращается в номер 0.
             editedSector = -1; // При смене колеса прежний сектор автоматически не выбираем.
             wheelLabel.setText("Колесо " + editedWheel);
             refreshSectorControls(); //обновляем видимые настройки сектора
@@ -393,7 +439,7 @@ exports.create = function(api) {
 
         // ПРАВАЯ ЧАСТЬ: ПОЛЗУНОК РАЗМЕРА ИКОНКИ
         var editor = new Table();
-        scaleSlider = new Slider(40, 200, 1, true); // Размер 40–200%, шаг 1%; true — вертикальный ползунок слева от круга.
+        scaleSlider = new Slider(40, 200, 1, true, createSliderStyle(true)); // Размер 40–200%, шаг 1%; true — вертикальный ползунок слева от круга.
         scaleSlider.name = "buildwheel-icon-scale";
         scaleSlider.moved(value => {
             if (editedSector < 0) return;
@@ -427,7 +473,7 @@ exports.create = function(api) {
         if (!Vars.state.isGame() || dialog.isShown()) return; // Не открываем из главного меню и не создаём повторное открытие того же окна.
         // *Сохраняем номер ДО closeWheel/show: слушатель в main.js сбросит
         // *activeWheelNumber при открытии любого диалога, включая наше меню.
-        editedWheel = validIndex(wheelNumber, wheelCount) ? wheelNumber : 0; // При корректном номере начинаем с него, иначе с колеса 0.
+        editedWheel = validIndex(wheelNumber, wheelCount) ? wheelNumber : 1; // При открытом игровом колесе берём его номер, иначе начинаем с колеса 1.
         editedSector = -1;
         api.closeWheel(); // Закрываем "колесо выбора" перед показом редактора.
         buildInterface();
