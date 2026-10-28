@@ -27,7 +27,7 @@ exports.create = function(api) {
     var directionNames = ["Север", "Северо-восток", "Восток", "Юго-восток",
         "Юг", "Юго-запад", "Запад", "Северо-запад"];
 
-    var dialog = new BaseDialog("BuildWheel — настройки"); // Объект - окно "меню настроек"
+    var dialog = new BaseDialog("Радиальное меню"); // Объект - окно "меню настроек"
     var grid, blockPane, searchField, sectorLabel, wheelLabel, scaleLabel; // Ссылки на виджеты: присвоим их при построении содержимого окна.
     var wheelSlider, scaleSlider, clearSelectionButton, clearSlotButton;
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
@@ -328,11 +328,14 @@ exports.create = function(api) {
         body.top(); //это выравнивание по верхнему краю    
         var left = new Table(); //поиск, кнопки категорий и лист блоков
         left.top();
-        searchField = left.field(searchText, text => {//поиск по названию
+        var searchRow = new Table(); // Значок и поле находятся в одной строке, остальные элементы левой части — под ней.
+        searchRow.image(Icon.zoom).size(44).name("buildwheel-search-icon"); // Высота значка совпадает с высотой поля поиска.
+        searchField = searchRow.field(searchText, text => {//поиск по названию
             searchText = String(text); // Callback поля передаёт новый текст; ту же сходу сохраняем его как строку JS.
             rebuildGrid();
         }).height(44).growX().name("buildwheel-search").get(); // фиксированная высота поиска 44, автоматическая ширина на всю ширину лева; системное имя "buildwheel-search"; get возвращает созданный TextField.
-        searchField.setMessageText("Поиск по названию блока"); // Подсказка пустого поля.
+        searchField.setMessageText("Поиск блока..."); // Подсказка пустого поля.
+        left.add(searchRow).growX();
         left.row(); //заканчиваем со строкой, перенося последующие элементы UI на новый ряд
         
         // ЛЕВАЯ ЧАСТЬ: КНОПКИ КАТЕГОРИЙ
@@ -381,7 +384,7 @@ exports.create = function(api) {
             wheelLabel.setText("Колесо " + editedWheel);
             refreshSectorControls(); //обновляем видимые настройки сектора
         });
-        right.add(wheelSlider).growX().height(32).padBottom(8);
+        right.add(wheelSlider).growX().height(32).padTop(8).padBottom(8); // Отступ сверху не даёт высокому стандартному бегунку перекрывать подпись колеса.
         right.row();
 
         // ПРАВАЯ ЧАСТЬ: ТЕКСТОВАЯ СТРОКА ИМЕНИ БЛОКА СЕКТОРА
