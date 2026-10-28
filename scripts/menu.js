@@ -97,7 +97,7 @@ exports.create = function(api) {
         var block = selected ? api.getBlock(editedWheel, editedSector) : null; //ставим нужный блок
         sectorLabel.setText(selected
             ? directionNames[editedSector] + ": " + (block == null ? "пустой слот" : String(block.localizedName))
-            : "Выберите сектор на колесе справа"); //описание над колесом?
+            : "Выберите сектор на колеса"); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
         clearSlotButton.visible = selected; // Показываем кнопку 'Сброс блока' у выбранного 'зелёному' сектору.
         clearSlotButton.setDisabled(!selected || block == null); // Уже пустой слот повторно очищать незачем.
@@ -198,7 +198,7 @@ exports.create = function(api) {
                 var left = x + padding, right = x + width - padding;
                 var bottom = y + padding, top = y + height - padding;
                 Lines.stroke(Math.max(1, Math.min(width, height) * 0.07)); //толщина линий
-                Lines.rect(left + 1, bottom + 1, right - left, top - bottom); //квадрат
+                Lines.rect(left + 1, bottom + 1, right - left - 2, top - bottom - 2); //квадрат
                 Lines.line(left, bottom, right, top); //диагональ снизу вверх
                 Lines.line(left, top, right, bottom); //диагональ сверху вниз
                 Lines.stroke(previousStroke); // Не оставляем нашу толщину для следующих элементов UI.
