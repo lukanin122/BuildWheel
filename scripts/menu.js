@@ -29,7 +29,7 @@ exports.create = function(api) {
 
     var dialog = new BaseDialog("BuildWheel — настройки"); // Объект - окно "меню настроек"
     var grid, blockPane, searchField, sectorLabel, wheelLabel, scaleLabel; // Ссылки на виджеты: присвоим их при построении содержимого окна.
-    var wheelSlider, scaleSlider, clearSelectionButton;
+    var wheelSlider, scaleSlider, clearSelectionButton, clearSlotButton;
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
     var categoryButtons = []; // Такие же записи для вкладок категорий.
     var gridColumns = 1;
@@ -99,6 +99,8 @@ exports.create = function(api) {
             ? directionNames[editedSector] + ": " + (block == null ? "пустой слот" : String(block.localizedName))
             : "Выберите сектор на колесе справа"); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
+        clearSlotButton.visible = selected; // Показываем кнопку 'Сброс блока' у выбранного 'зелёному' сектору.
+        clearSlotButton.setDisabled(!selected || block == null); // Уже пустой слот повторно очищать незачем.
         scaleSlider.visible = selected; // Без выбранного сектора ползунок полностью скрыт.
         scaleLabel.visible = selected; // Подпись с процентом показываем вместе с ползунком.
         scaleSlider.setDisabled(!selected); // Разблокировка ползунка размера иконки при наличии 'зелёного' сектора.
@@ -186,8 +188,29 @@ exports.create = function(api) {
         categoryButtons.push({button: button, category: nextCategory}); //вывешиваем объект кнопки и ссылку в глобальный интерфейс
     }
 
+    // Создание кнопки-иконки 'Сброса блока' - перечёркнутый квадрат.
+    // Цвет и прозрачность задаёт ImageButton, поэтому здесь меняем только толщину линий.
+    function createClearSlotIcon() {
+        var icon = extend(BaseDrawable, {
+            draw: function(x, y, width, height) {
+                var previousStroke = Lines.getStroke();
+                var padding = Math.min(width, height) * 0.16; //Берется 16% от меньшей стороны элемента. Это нужно, чтобы иконка не упиралась в края своей ячейки и выглядела аккуратно
+                var left = x + padding, right = x + width - padding;
+                var bottom = y + padding, top = y + height - padding;
+                Lines.stroke(Math.max(1, Math.min(width, height) * 0.07)); //толщина линий
+                Lines.rect(left + 1, bottom + 1, right - left, top - bottom); //квадрат
+                Lines.line(left, bottom, right, top); //диагональ снизу вверх
+                Lines.line(left, top, right, bottom); //диагональ сверху вниз
+                Lines.stroke(previousStroke); // Не оставляем нашу толщину для следующих элементов UI.
+            }
+        });
+        icon.setMinWidth(24);
+        icon.setMinHeight(24);
+        return icon;
+    }
+
     // ------------------------------------------------------------
-    // МАНЕКЕН: КРУГ, ВЫБОР СЕКТОРА И КРЕСТИК
+    // МАНЕКЕН: КРУГ, ВЫБОР СЕКТОРА И КНОПКИ В УГЛАХ
     // ------------------------------------------------------------
     // Манекен — "колесо строительства" находящиеся в меню
     function createPreview() {
@@ -259,9 +282,18 @@ exports.create = function(api) {
         clearSelectionButton.name = "buildwheel-deselect";
         var crossSize = Math.min(Scl.scl(32), previewSize * 0.18);
         clearSelectionButton.setSize(crossSize, crossSize);
-        clearSelectionButton.setPosition(0, previewSize - crossSize); // Верхний левый угол группы; при перемещении манекена крестик перемещается вместе с ним.
+        clearSelectionButton.setPosition(previewSize - crossSize, previewSize - crossSize); // Верхний правый угол манекена.
         clearSelectionButton.clicked(() => selectSector(-1)); // Снимает выделение, сохраняя блок и размер иконки в слоте.
+        clearSelectionButton.addListener(new Tooltip(table => table.add("Снять выделение сектора")));
         group.addChild(clearSelectionButton);
+
+        clearSlotButton = new ImageButton(createClearSlotIcon(), Styles.cleari);
+        clearSlotButton.name = "buildwheel-clear-slot";
+        clearSlotButton.setSize(crossSize, crossSize); // Обе угловые кнопки у 'манекена' одинакового размера.
+        clearSlotButton.setPosition(0, previewSize - crossSize); // Освободившийся верхний левый угол 'Сброс блока'.
+        clearSlotButton.clicked(() => assignBlock(null)); // Очищаем и сохраняем слот; зелёное выделение и масштаб остаются.
+        clearSlotButton.addListener(new Tooltip(table => table.add("Удалить блок из сектора")));
+        group.addChild(clearSlotButton);
         return group;
     }
 
@@ -281,10 +313,10 @@ exports.create = function(api) {
         var screenWidth = Core.scene.getWidth() / Scl.scl();  // Cell.width/height сами умножают числа на Scl. Деление Scl.scl() переводит реальные
         var screenHeight = Core.scene.getHeight() / Scl.scl();// размеры сцены в UI-единицы, сохраняя доли экрана при любом масштабе UI.
         var contentWidth = screenWidth * 0.92; // Всё содержимое занимает 92% ширины экрана.
-        var listWidth = contentWidth * 0.55; // 55% ширины отводим левой части.
+        var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
         previewSize = api.getWheelDiameter(); // Тот же диаметр, что у игрового колеса; от размеров окна не зависит.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
-        var rightWidth = Math.max(contentWidth * 0.40, previewUiSize + 36); // Не меньше манекена плюс ползунок шириной 28 и отступ 8.
+        var rightWidth = Math.max(contentWidth * 0.50, previewUiSize + 36); // 50% или не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
