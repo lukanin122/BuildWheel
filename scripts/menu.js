@@ -22,7 +22,7 @@ exports.create = function(api) {
     // Локальное состояние редактора не меняет номер игрового колеса.
     var editedWheel = 0; // Какое колесо сейчас редактируем в манекене.
     var editedSector = -1; // Редактируемый 'зелёный' сектор 0–7, дефолт -1
-    var category = Category.distribution;
+    var category = null; // null — вкладка категории «Всё», без фильтра по типам блоков. Она выбрана изначально.
     var searchText = ""; // Сохраняем запрос, чтобы восстановить поле после изменения размера окна.
     var directionNames = ["Север", "Северо-восток", "Восток", "Юго-восток",
         "Юг", "Юго-запад", "Запад", "Северо-запад"];
@@ -97,7 +97,7 @@ exports.create = function(api) {
         var block = selected ? api.getBlock(editedWheel, editedSector) : null; //ставим нужный блок
         sectorLabel.setText(selected
             ? directionNames[editedSector] + ": " + (block == null ? "пустой слот" : String(block.localizedName))
-            : "Выберите сектор на колеса"); //описание над колесом?
+            : "Выберите сектор на колесе"); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
         clearSlotButton.visible = selected; // Показываем кнопку 'Сброс блока' у выбранного 'зелёному' сектору.
         clearSlotButton.setDisabled(!selected || block == null); // Уже пустой слот повторно очищать незачем.
@@ -148,8 +148,8 @@ exports.create = function(api) {
         for (var i = 0; i < blocks.size; i++) {
             var block = blocks.get(i);
             // Исключаем декорации/служебные блоки. 
-            // Исследования, планета и ресурсы не фильтруются: здесь видны все строительные блоки категории.
-            if (!block.placeablePlayer || block.category != category
+            // Исследования, планета и ресурсы не фильтруются; «Всё» отключает только фильтры остальных категорий.
+            if (!block.placeablePlayer || (category != null && block.category != category)
                 || block.buildVisibility == BuildVisibility.hidden
                 || block.buildVisibility == BuildVisibility.debugOnly) continue;
             var name = String(Strings.stripColors(String(block.localizedName))).toLowerCase(); // Цветовые теги в названии не должны мешать поиску.
@@ -175,12 +175,14 @@ exports.create = function(api) {
     }
 
     //Добавление категории блоков
-    function addCategoryButton(table, nextCategory, size) {
-        // Берём те же изображения и порядок Category.all, что штатное меню.
-        var cell = table.button(Vars.ui.getIcon(nextCategory.name()), //создает кнопку-переключатель привязывая к ней системную иконку Mindustry
+    function addCategoryButton(table, nextCategory, size) {       
+        var allCategories = nextCategory == null; // Для «Всё» передаём null; остальные вкладки используют игровые Category.
+        var categoryName = allCategories ? "all" : String(nextCategory.name());
+        var categoryIcon = allCategories ? Icon.folderEmpty : Vars.ui.getIcon(categoryName);
+        var cell = table.button(categoryIcon,
             () => chooseCategory(nextCategory)); //запоминаем какую категорию активируем кнопкой
-        cell.size(size).name("buildwheel-category-" + nextCategory.name()); // Размер кнопки и отступы;
-        cell.tooltip(Core.bundle.get("blocks." + nextCategory.name(), nextCategory.name())); // // Подсказка показывает название. Берём перевод из игры; если его нет (а его нет), показываем имя категории.
+        cell.size(size).name("buildwheel-category-" + categoryName);
+        cell.tooltip(allCategories ? "Всё" : Core.bundle.get("blocks." + categoryName, categoryName));
         var button = cell.get();
         button.resizeImage(24);
         button.setProgrammaticChangeEvents(false);// отключение повторный запуск функции chooseCategory
@@ -338,8 +340,9 @@ exports.create = function(api) {
         categoryButtons = []; //на всякий обновляем массив
         var categorySize = Math.min(40, listWidth / 5); //пятая часть ширины левой области
         var categoryColumns = Math.max(1, Math.floor(listWidth / categorySize)); // На узком окне категории переходят на следующую строку.
+        addCategoryButton(categories, null, categorySize); // Первая вкладка — «Всё», значок пустой папки.
         for (var i = 0; i < Category.all.length; i++) {
-            if (i > 0 && i % categoryColumns == 0) categories.row(); //перенос
+            if ((i + 1) % categoryColumns == 0) categories.row(); // Учитываем уже добавленную первую вкладку.
             addCategoryButton(categories, Category.all[i], categorySize); //добавление кнопки
         }
         left.add(categories).growX().padBottom(8); //добавляем в left по всей ширине и нижним отступом в 8 пикселей
