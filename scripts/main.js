@@ -38,6 +38,7 @@ Events.on(ClientLoadEvent, () => {
     var capturedLeft = false;
     var capturedRight = false;
     var pendingSelection = null; // Запрос выбора, ожидающий выполнения в очереди приложения.
+    var settingsMinusCaptured = false; // Минус открыл настройки: его отпускание тоже не отдаём игре.
 
     // Определяем наличие курсора на одном из секторов
     // Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
@@ -172,6 +173,7 @@ Events.on(ClientLoadEvent, () => {
     wheel.visible = false;
     wheel.touchable = Touchable.enabled; // 2) Колесо теперь участвует в проверке попадания мыши.
     Core.scene.root.addChild(wheel); //Прикрепляем объект wheel для сцены
+    //==============================================================
 
     //Закрытие колеса при выходе в меню или сбросе мира.
     function closeWheel() {
@@ -203,44 +205,54 @@ Events.on(ClientLoadEvent, () => {
         }
         return false;
     }
+    //==============================================================
 
-    function wheelInputBlocked() { // Нельзя снова открыть колесо, пока удерживается режим работы с областью.
+    // Нельзя снова открыть колесо, пока удерживается режим работы с областью.
+    function wheelInputBlocked() {
         return Core.scene.hasDialog() || Core.scene.hasKeyboard()
             || Core.input.keyDown(Binding.schematicSelect)
             || Core.input.keyDown(Binding.rebuildSelect);
     }
 
-    // 3) Меню работает со слотами через явные функции. Данные колеса остаются
+    //==============================================================
+    // 3) Связь с настройками main.js
+    //==============================================================
     // здесь, интерфейс и сохранение настроек находятся в модуле menu.js.
     var settingsMenu = menuModule.create({
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
         drawSector: drawSector,
         innerRadiusRatio: innerRadiusRatio,
-        isWheelOpen: function() { return wheelOpen; },
-        getWheelNumber: function() { return activeWheelNumber; },
-        closeWheel: closeWheel,
-        isInputBlocked: wheelInputBlocked
+        closeWheel: closeWheel
     });
 
-    // Сцена сообщает о получении клавиатурного/scroll-фокуса любым её потомком.
-    // Это охватывает стандартные Dialog/BaseDialog, большую карту, поля ввода
-    // и обычные диалоги модов, даже когда их открыли программно, а не клавишей.
-    // Слушатель ничего не поглощает: новое окно получает фокус и ввод как обычно.
-    Core.scene.root.addCaptureListener(extend(FocusListener, {
+    // Открытие меню
+    // Колесо может быть закрыто; пауза допустима. Другое окно или начатый жест мыши
+    // не прерываем. При открытом колесе меню начнёт с его номера, иначе — с колеса 0.
+    function openSettingsFromKey(key) {
+        if (key != KeyCode.minus || !Vars.state.isGame() || wheelInputBlocked()) return false;
+        var shiftPressed = Core.input.keyDown(KeyCode.shiftLeft)
+            || Core.input.keyDown(KeyCode.shiftRight);
+        if (!shiftPressed || capturedLeft || capturedRight
+            || Core.input.keyDown(KeyCode.mouseLeft)
+            || Core.input.keyDown(KeyCode.mouseRight)) return false;
+
+        settingsMinusCaptured = true;
+        settingsMenu.show(activeWheelNumber); // show сохранит номер до сброса activeWheelNumber в closeWheel.
+        return true;
+    }
+    //==============================================================
+
+    Core.scene.root.addCaptureListener(extend(FocusListener, {//о получении клавиатурного фокуса
         keyboardFocusChanged: function(event, actor, focused) {
             if (focused) closeWheel();
         },
-        scrollFocusChanged: function(event, actor, focused) {
+        scrollFocusChanged: function(event, actor, focused) {//о получении scroll фокуса
             if (focused) closeWheel();
         }
     }));
-    //==============================================================
-    //==============================================================
 
-    // Ставим одну задачу только после выбора непустого сектора.
-    // В настольной версии очередь post выполняется после обновления игры и UI:
-    // горячая клавиша открытия уже не сможет перезаписать наш выбор в этом кадре.
+    // поставить в очередь задачу строительства блоков
     function queueBlockSelection(block) {
         if (block == null) return;
         // Каждый запрос — отдельный объект, даже при выборе того же блока.
@@ -266,10 +278,9 @@ Events.on(ClientLoadEvent, () => {
         });
     }
 
-    Events.on(StateChangeEvent, event => {
-        if (event.to == GameState.State.menu) closeWheel();
-    });   // Выход в меню - сброс колеса.
-
+    Events.on(StateChangeEvent, event => { //о выходе в меню
+        if (event.to == GameState.State.menu) closeWheel(); // сброс колеса
+    });
     Events.on(ResetEvent, () => closeWheel()); // Сброс мира - сброс колеса
 
     //==============================================================
@@ -278,8 +289,9 @@ Events.on(ClientLoadEvent, () => {
     // InputProcessor — интерфейс Arc.
     Core.input.getInputMultiplexer().addProcessor(0, extend(InputProcessor, {//getInputMultiplexer() отбирает приоритет у keyDown, keyTap и keyRelease - риск при других модах
         keyDown: function(key) {
-            // 3) Настройки и их клавиши обрабатываются до игровых действий.
+            
             if (settingsMenu.handleKeyDown(key)) return true;
+            if (openSettingsFromKey(key)) return true; // 3) Модуль обслуживает закрытие настроек; открытие по Shift + минус — здесь.
             // 2.4) Сначала закрываем колесо и пропускаем клавишу дальше в игру.
             // Это должно работать и без Shift, и при открытии меню на паузе.
             if (closeForGameAction(key)) return false;
@@ -322,8 +334,12 @@ Events.on(ClientLoadEvent, () => {
             return false;
         },
 
-        // 3) Отпускания клавиш меню должны обрабатываться и при открытом диалоге.
+        // 3) Отпускания клавиш меню должны обрабатываться при открытом меню, которые так-то блокируется при запуске.
         keyUp: function(key) {
+            if (key == KeyCode.minus && settingsMinusCaptured) {
+                settingsMinusCaptured = false;
+                return true;
+            }
             return settingsMenu.handleKeyUp(key);
         },
 

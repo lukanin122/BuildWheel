@@ -34,8 +34,6 @@ exports.create = function(api) {
     var categoryButtons = []; // Такие же записи для вкладок категорий.
     var gridColumns = 1;
     var previewSize = 0; // Размер манекена в координатах сцены; ниже он рассчитывается из размеров экрана.
-    var tabCaptured = false; // Мы поглотили нажатие Tab, поэтому должны поглотить и его отпускание.
-    var minusCaptured = false; // Аналогичная отметка для минуса.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
 
     // ------------------------------------------------------------
@@ -429,7 +427,7 @@ exports.create = function(api) {
     Events.on(DisposeEvent, () => flushSettings()); // Сохраняем оставшиеся изменения при завершении приложения.
 
     // ------------------------------------------------------------
-    // УПРАВЛЕНИЕ МЕНЮ: TAB + МИНУС И КЛАВИША ЗАКРЫТИЯ
+    // КЛАВИШИ ЗАКРЫТИЯ МЕНЮ (СОЧЕТАНИЕ ОТКРЫТИЯ НАХОДИТСЯ В MAIN.JS)
     // ------------------------------------------------------------
     // Основной InputProcessor в main.js передаёт сюда события до обработчиков игры.
     // true означает «меню забрало событие», false — «пусть обрабатывают остальные».
@@ -449,18 +447,6 @@ exports.create = function(api) {
             }
             return false;
         }
-        if (!api.isWheelOpen() || api.isInputBlocked()) return false; // Комбинация настроек действует только при открытом колесе и свободном вводе.
-        if (key == KeyCode.tab) {
-            // Tab штатно вызывает список игроков. Пока колесо открыто, это наш
-            // модификатор меню: не передаём его нажатие KeyboardDevice.
-            tabCaptured = true;
-            return true;
-        }
-        if (key == KeyCode.minus && (tabCaptured || Core.input.keyDown(KeyCode.tab))) { // Tab либо перехвачен нами, либо был нажат ещё до открытия колеса.
-            minusCaptured = true;
-            show(api.getWheelNumber()); // Получаем номер, пока show ещё не закрыл игровое колесо и не сбросил его.
-            return true;
-        }
         return false;
     }
 
@@ -468,14 +454,6 @@ exports.create = function(api) {
     function handleKeyUp(key) {
         // Отпускания поглощаются даже после открытия/закрытия меню, чтобы игра
         // не получила keyRelease без соответствующего keyDown.
-        if (key == KeyCode.tab && tabCaptured) { // Если Tab был нажат раньше и дошёл до игры, его отпускание здесь не забираем.
-            tabCaptured = false;
-            return true;
-        }
-        if (key == KeyCode.minus && minusCaptured) {
-            minusCaptured = false;
-            return true;
-        }
         if (closeKeysCaptured[key.ordinal()]) {
             closeKeysCaptured[key.ordinal()] = false;
             return true;
@@ -491,7 +469,7 @@ exports.create = function(api) {
     return {
         show: show,
         getIconScale: getIconScale, // Игровое колесо запрашивает сохранённый масштаб своей иконки.
-        handleKeyDown: handleKeyDown, // Нажатия клавиш и назначенных на меню кнопок мыши.
-        handleKeyUp: handleKeyUp // Соответствующие отпускания, даже если окно уже закрыто.
+        handleKeyDown: handleKeyDown, // Закрытие настроек клавишей игрового меню или назначенной на неё кнопкой мыши.
+        handleKeyUp: handleKeyUp // Отпускания перехваченных клавиш закрытия, даже если окно уже исчезло.
     };
 };
