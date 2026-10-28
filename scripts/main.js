@@ -229,7 +229,6 @@ Events.on(ClientLoadEvent, () => {
 
     // Открытие меню
     // Колесо может быть закрыто; пауза допустима. Другое окно или начатый жест мыши
-    // не прерываем. При открытом колесе меню начнёт с его номера, иначе — с колеса 0.
     function openSettingsFromKey(key) {
         if (key != KeyCode.minus || !Vars.state.isGame() || wheelInputBlocked()) return false;
         var shiftPressed = Core.input.keyDown(KeyCode.shiftLeft)
