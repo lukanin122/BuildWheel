@@ -179,12 +179,14 @@ exports.create = function(api) {
         var allCategories = nextCategory == null; // Для «Всё» передаём null; остальные вкладки используют игровые Category.
         var categoryName = allCategories ? "all" : String(nextCategory.name());
         var categoryIcon = allCategories ? Icon.folderEmpty : Vars.ui.getIcon(categoryName);
-        var cell = table.button(categoryIcon,
+        var cell = table.button(categoryIcon, Styles.squareTogglei,
             () => chooseCategory(nextCategory)); //запоминаем какую категорию активируем кнопкой
-        cell.size(size).name("buildwheel-category-" + categoryName);
+        cell.size(size).name("buildwheel-category-" + categoryName); // Кнопки соприкасаются рамками, без внешних отступов.
         cell.tooltip(allCategories ? "Всё" : Core.bundle.get("blocks." + categoryName, categoryName));
         var button = cell.get();
-        button.resizeImage(24);
+        //button.resizeImage(Math.min(24, size - 3)); // либо 24 (великовато), либо 21 (в самый раз)
+        button.resizeImage(21);
+        button.getImageCell().pad(1.5); // внутренний отступ от краёв рамки
         button.setProgrammaticChangeEvents(false);// отключение повторный запуск функции chooseCategory
         button.setChecked(nextCategory == category); //визуально выделяем совпадающую категория с текущей активной
         categoryButtons.push({button: button, category: nextCategory}); //вывешиваем объект кнопки и ссылку в глобальный интерфейс
@@ -341,14 +343,14 @@ exports.create = function(api) {
         // ЛЕВАЯ ЧАСТЬ: КНОПКИ КАТЕГОРИЙ
         var categories = new Table();
         categoryButtons = []; //на всякий обновляем массив
-        var categorySize = Math.min(40, listWidth / 5); //пятая часть ширины левой области
+        var categorySize = Math.min(41, listWidth / 5); // пятая часть ширины левой области
         var categoryColumns = Math.max(1, Math.floor(listWidth / categorySize)); // На узком окне категории переходят на следующую строку.
         addCategoryButton(categories, null, categorySize); // Первая вкладка — «Всё», значок пустой папки.
         for (var i = 0; i < Category.all.length; i++) {
             if ((i + 1) % categoryColumns == 0) categories.row(); // Учитываем уже добавленную первую вкладку.
             addCategoryButton(categories, Category.all[i], categorySize); //добавление кнопки
         }
-        left.add(categories).growX().padBottom(8); //добавляем в left по всей ширине и нижним отступом в 8 пикселей
+        left.add(categories).growX().padTop(8).padBottom(8); // Отделяем категории от поиска сверху и списка блоков снизу.
         left.row();
 
         // ЛЕВАЯ ЧАСТЬ: ТАБЛИЦА БЛОКОВ
