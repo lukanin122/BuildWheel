@@ -67,11 +67,6 @@ Events.on(ClientLoadEvent, () => {
     var wheel = wheelView.createElement({
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
-        getHighlightedSector: function() {//подсвеченный сектор
-            mousePosition.set(Core.input.mouseX(), Core.input.mouseY());
-            Core.scene.screenToStageCoordinates(mousePosition);
-            return sectorAt(mousePosition.x, mousePosition.y);
-        },
         getIconAlpha: function(block) {//проверяем на возможность строить в данном мире и при данных ресурсах
             return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30; //если можем разместить - null, нет? - 0.30 прозрачности
         },

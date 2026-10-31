@@ -224,9 +224,8 @@ exports.create = function(api) {
         group.setTransform(false); // Группа объединяет круг и крестик; собственные поворот и масштаб ей не нужны.
         var preview = wheelView.createElement({
             getWheelNumber: function() { return editedWheel; },
-            getHighlightedSector: function() { return editedSector; },
-            highlightColor: Color.green, // Зелёное выделение сохраняется до выбора другого сектора или снятия выделения.
-            highlightAlpha: 0.45 // getIconAlpha не задаём: редактор показывает и недоступные блоки с полной яркостью.            
+            getSelectedSector: function() { return editedSector; } // Здесь указано постоянное выделение, 'зелёный' сектор. Наведение мышки на сектор определяет 'общая фабрика'.
+            // *getIconAlpha убран: 'манекен' показывает и недоступные блоки с полной непрозрачностью
         });
         preview.name = "buildwheel-preview";
 
