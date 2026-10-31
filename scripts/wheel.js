@@ -20,10 +20,10 @@ exports.create = function(api) {
         lineColor: Color.white.cpy(),
         lineAlpha: 0.55,
         lineWidth: 1,
-        innerLineColor: Color.white.cpy(), // Обводка центра настраивается отдельно от разделителей секторов.
-        innerLineAlpha: 0.55,
-        innerLineWidth: 1,
-        outerColor: Color.white.cpy(),
+        innerLineColor: Color.white.cpy(), // Задаём исходный цвет внутренней окружности (собственный Color для обоих колёс).
+        innerLineAlpha: 0.55, // Задаём исходную непрозрачность внутренней окружности.
+        innerLineWidth: 1, // Задаём исходную толщину внутренней окружности.
+        outerColor: Color.white.cpy(), // Задаём собственный цвет внешней окружности, независимый от разделителей.
         outerAlpha: 0.70, //прозрачность линии обводки внешеней границы колеса
         outerWidth: 2,  //толщина линии обводки внешеней границы колеса
         outerInset: 1,  //отступ пикселей обводки внешеней границы колеса во внутрь (бесполезная ли переменная это? Можно и автоматизировать)
@@ -36,21 +36,21 @@ exports.create = function(api) {
         selectionHoverMix: 0.5 // Доля цвета наведения в выбранном секторе: 0 — только выделение, 1 — только наведение.
     };
 
-    // Снимок исходного вида для кнопок сброса. Цвета копируем, чтобы их настройка не меняла образец.
-    var appearanceDefaults = {};
-    for (var key in appearance) {
-        var value = appearance[key];
-        appearanceDefaults[key] = value instanceof Color ? value.cpy() : value;
+    // ИСХОДНЫЙ ВИД ДЛЯ КНОПОК СБРОСА
+    var appearanceDefaults = {}; // Отдельно запоминаем исходные параметры «колеса выбора» и «манекена».
+    for (var key in appearance) { // Перебираем имена всех параметров внешнего вида.
+        var value = appearance[key]; // Получаем исходное значение очередного параметра.
+        appearanceDefaults[key] = value instanceof Color ? value.cpy() : value; // Для Color сохраняем отдельную копию; для числа достаточно самого значения.
     }
 
-    // Сбрасываем только перечисленные параметры. Ссылки на текущие цвета остаются действительными.
-    function resetAppearance(keys) {
-        for (var i = 0; i < keys.length; i++) {
-            var key = keys[i];
-            if (!appearanceDefaults.hasOwnProperty(key)) continue;
-            var value = appearanceDefaults[key];
-            if (value instanceof Color) appearance[key].set(value);
-            else appearance[key] = value;
+    // СБРОС ПАРАМЕТРОВ ОДНОЙ ГРУППЫ
+    function resetAppearance(keys) { // Меню передаёт массив имён параметров, относящихся к нажатой кнопке refresh.
+        for (var i = 0; i < keys.length; i++) { // По очереди восстанавливаем только перечисленные параметры.
+            var key = keys[i]; // Берём имя очередного параметра.
+            if (!appearanceDefaults.hasOwnProperty(key)) continue; // Пропускаем имена, для которых нет исходного значения.
+            var value = appearanceDefaults[key]; // Получаем значение из сохранённого образца.
+            if (value instanceof Color) appearance[key].set(value); // Возвращаем исходный цвет, сохраняя существующий объект Color и ссылки на него.
+            else appearance[key] = value; // Возвращаем исходное числовое значение.
         }
     }
 
@@ -148,27 +148,26 @@ exports.create = function(api) {
         Draw.color(appearance.centerColor);
         Draw.alpha(appearance.centerAlpha);
         Fill.circle(centerX, centerY, innerRadius);//Закрашиваем внутренний круг
-        if (appearance.innerLineWidth > 0 && innerRadius > 0) {
-            Draw.color(appearance.innerLineColor);
-            Draw.alpha(appearance.innerLineAlpha);
-            Lines.stroke(appearance.innerLineWidth);
-            Lines.circle(centerX, centerY, innerRadius);//Рисуем отдельную обводку внутреннего круга.
+        if (appearance.innerLineWidth > 0 && innerRadius > 0) { // Рисуем внутреннюю окружность только при ненулевой толщине и положительном радиусе.
+            Draw.color(appearance.innerLineColor); // Выбираем цвет внутренней окружности из общих настроек.
+            Draw.alpha(appearance.innerLineAlpha); // Устанавливаем её непрозрачность.
+            Lines.stroke(appearance.innerLineWidth); // Устанавливаем толщину её линии.
+            Lines.circle(centerX, centerY, innerRadius); // Обводим внутренний круг «колеса выбора» или «манекена».
         }
 
-        // Нулевая толщина скрывает разделители, но не иконки секторов.
-        Draw.color(appearance.lineColor);
-        Draw.alpha(appearance.lineAlpha);
-        if (appearance.lineWidth > 0) Lines.stroke(appearance.lineWidth);
+        // ОТРИСОВКА РАЗДЕЛИТЕЛЕЙ СЕКТОРОВ
+        Draw.color(appearance.lineColor); // Выбираем цвет разделительных полос.
+        Draw.alpha(appearance.lineAlpha); // Устанавливаем непрозрачность разделительных полос.
+        if (appearance.lineWidth > 0) Lines.stroke(appearance.lineWidth); // Задаём толщину, если разделители не скрыты нулевым значением.
 
         for (var sector = 0; sector < sectorCount; sector++) {
-            var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180;
-            // границы-линии разделяющие сектора по их колличеству
-            if (appearance.lineWidth > 0) {
-                Lines.line(
-                    centerX + Math.sin(boundary) * innerRadius,
-                    centerY + Math.cos(boundary) * innerRadius,
-                    centerX + Math.sin(boundary) * radius,
-                    centerY + Math.cos(boundary) * radius
+            var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180; // Получаем угол границы очередного сектора в радианах.
+            if (appearance.lineWidth > 0) { // При нулевой толщине пропускаем линию, сохраняя дальнейшую отрисовку иконки.
+                Lines.line( // Соединяем точки на внутреннем и внешнем радиусах одной разделительной полосой.
+                    centerX + Math.sin(boundary) * innerRadius, // Координата X начала линии у внутреннего круга.
+                    centerY + Math.cos(boundary) * innerRadius, // Координата Y начала линии у внутреннего круга.
+                    centerX + Math.sin(boundary) * radius, // Координата X конца линии у внешней границы.
+                    centerY + Math.cos(boundary) * radius // Координата Y конца линии у внешней границы.
                 );
             }
 
@@ -191,13 +190,13 @@ exports.create = function(api) {
             }
         }
 
-        //рисуем внешнюю обводку-окружность
-        var outerRadius = radius - appearance.outerInset;
-        if (appearance.outerWidth > 0 && outerRadius > 0) {
-            Draw.color(appearance.outerColor);
-            Draw.alpha(appearance.outerAlpha);
-            Lines.stroke(appearance.outerWidth);
-            Lines.circle(centerX, centerY, outerRadius);
+        // ОТРИСОВКА ВНЕШНЕЙ ОКРУЖНОСТИ
+        var outerRadius = radius - appearance.outerInset; // Смещаем окружность внутрь от края основного круга на заданный отступ.
+        if (appearance.outerWidth > 0 && outerRadius > 0) { // Пропускаем скрытую окружность и недопустимый радиус слишком маленького круга.
+            Draw.color(appearance.outerColor); // Выбираем собственный цвет внешней окружности.
+            Draw.alpha(appearance.outerAlpha); // Устанавливаем её непрозрачность.
+            Lines.stroke(appearance.outerWidth); // Устанавливаем толщину внешней обводки.
+            Lines.circle(centerX, centerY, outerRadius); // Рисуем внешнюю окружность «колеса выбора» или «манекена».
         }
         Draw.reset(); // В Arc сбрасывает цвет, прозрачность и толщину линий для следующего элемента UI.
     }
@@ -248,8 +247,8 @@ exports.create = function(api) {
 
     return {
         appearance: appearance,
-        appearanceDefaults: appearanceDefaults,
-        resetAppearance: resetAppearance,
+        appearanceDefaults: appearanceDefaults, // Предоставляем исходные значения внешнего вида (цвета хранятся отдельными копиями).
+        resetAppearance: resetAppearance, // Даём меню функцию восстановления выбранных параметров по их именам.
         sectorCount: sectorCount,
         sectorAt: sectorAt,
         createElement: createElement
