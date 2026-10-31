@@ -25,6 +25,7 @@ exports.create = function(api) {
     var editedWheel = 1; // Начинаем с колеса 1; а 10-ый номер является 0
     var editedSector = -1; // Редактируемый 'зелёный' сектор 0–7, дефолт -1
     var category = null; // null — вкладка категории «Всё», без фильтра по типам блоков. Она выбрана изначально.
+    var campaignPlanet = null; // null — фильтр кампании выключен; категория и поиск от него не зависят.
     var searchText = ""; // Сохраняем запрос, чтобы восстановить поле после изменения размера окна.
     var directionNames = ["Север", "Северо-восток", "Восток", "Юго-восток",
         "Юг", "Юго-запад", "Запад", "Северо-запад"];
@@ -34,6 +35,7 @@ exports.create = function(api) {
     var wheelSlider, scaleSlider, clearSelectionButton, clearSlotButton;
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
     var categoryButtons = []; // Такие же записи для вкладок категорий.
+    var campaignButtons = []; // Записи {button, planet}: показывают, какая кампания включена.
     var gridColumns = 1;
     var previewSize = 0; // Диаметр манекена в координатах сцены; берём из общих настроек колеса.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
@@ -154,8 +156,9 @@ exports.create = function(api) {
         for (var i = 0; i < blocks.size; i++) {
             var block = blocks.get(i);
             // Исключаем декорации/служебные блоки. 
-            // Исследования, планета и ресурсы не фильтруются; «Всё» отключает только фильтры остальных категорий.
+            // Исследования и ресурсы не ограничивают редактор; «Всё» отключает только фильтр категорий.
             if (!block.placeablePlayer || (category != null && block.category != category)
+                || (campaignPlanet != null && !block.isOnPlanet(campaignPlanet))
                 || block.buildVisibility == BuildVisibility.hidden
                 || block.buildVisibility == BuildVisibility.debugOnly) continue;
             var name = String(Strings.stripColors(String(block.localizedName))).toLowerCase(); // Цветовые теги в названии не должны мешать поиску.
@@ -178,6 +181,38 @@ exports.create = function(api) {
             categoryButtons[i].button.setChecked(categoryButtons[i].category == category); // Из всех вкладок отмеченной остаётся только текущая.
         }
         rebuildGrid(); // Перестраиваем кнопки, сохраняя само поле поиска и его фокус.
+    }
+
+    // Повторный клик по активной кампании выключает её; выбор другой переключает фильтр.
+    function toggleCampaign(nextPlanet) {
+        campaignPlanet = campaignPlanet == nextPlanet ? null : nextPlanet;
+        for (var i = 0; i < campaignButtons.length; i++) {
+            campaignButtons[i].button.setChecked(campaignButtons[i].planet == campaignPlanet);
+        }
+        rebuildGrid(); // Категория, текст поиска и выбранный сектор сохраняются.
+    }
+
+    // Добавление кнопки-категории компании
+    function addCampaignButton(table, planet, size) {
+        var cell = table.button(Icon.planet, Styles.squareTogglei, () => toggleCampaign(planet));
+        cell.size(size).name("buildwheel-campaign-" + planet.name);
+        cell.tooltip(String(planet.localizedName));
+        var button = cell.get();
+        button.resizeImage(21); // Та же величина иконки, что у кнопок категорий.
+        button.getImageCell().pad(1.5);
+        var color = planet.iconColor;
+        if (color == null || (color.r == 1 && color.g == 1 && color.b == 1)) color = Color.gray;
+        // У Planet неуказанный цвет белый. Здесь показываем его серым; цвета кампаний берём из игры.
+        // Конструктор ImageButton копирует стиль, поэтому эти цвета меняют только текущую кнопку.
+        var style = button.getStyle();
+        var iconColor = color.cpy();
+        style.imageUpColor = iconColor;
+        style.imageOverColor = iconColor;
+        style.imageDownColor = iconColor;
+        style.imageCheckedColor = iconColor;
+        button.setProgrammaticChangeEvents(false);
+        button.setChecked(planet == campaignPlanet);
+        campaignButtons.push({button: button, planet: planet});
     }
 
     //Добавление категории блоков
@@ -308,17 +343,42 @@ exports.create = function(api) {
         left.add(searchRow).growX();
         left.row(); //заканчиваем со строкой, перенося последующие элементы UI на новый ряд
         
-        // ЛЕВАЯ ЧАСТЬ: КНОПКИ КАТЕГОРИЙ
-        var categories = new Table();
-        categoryButtons = []; //на всякий обновляем массив
+        // ЛЕВАЯ ЧАСТЬ: КАМПАНИИ СЛЕВА, КАТЕГОРИИ СПРАВА.
+        //============================================================================
+        // Кампании
+        //============================================================================
+        var filters = new Table();
+        var campaigns = new Table();
+        campaignButtons = [];
+        var campaignPlanets = [];
+        var planets = Vars.content.planets();
+        for (var p = 0; p < planets.size; p++) {
+            var planet = planets.get(p);
+            // Показываем видимые доступные планеты с секторами; звёзды и декоративные спутники пропускаем.
+            if (!planet.removed && planet.visible && planet.accessible && planet.isLandable()) campaignPlanets.push(planet);
+        }
         var categorySize = Math.min(41, listWidth / 5); // пятая часть ширины левой области
-        var categoryColumns = Math.max(1, Math.floor(listWidth / categorySize)); // На узком окне категории переходят на следующую строку.
+        var campaignColumns = Math.min(2, campaignPlanets.length); // Модовые кампании размещаем максимум по две в строке.
+        var campaignWidth = campaignColumns * categorySize;
+        var campaignGap = campaignPlanets.length > 0 ? 8 : 0;
+        for (var p = 0; p < campaignPlanets.length; p++) {
+            if (p > 0 && p % campaignColumns == 0) campaigns.row();
+            addCampaignButton(campaigns, campaignPlanets[p], categorySize);
+        }
+        //============================================================================
+        if (campaignPlanets.length > 0) filters.add(campaigns).width(campaignWidth).padRight(campaignGap).top();
+        var categories = new Table();
+        categories.left(); // Иконки начинаются сразу после небольшого отступа от кампаний.
+        categoryButtons = []; //на всякий обновляем массив
+        var categoriesWidth = listWidth - campaignWidth - campaignGap;
+        var categoryColumns = Math.max(1, Math.floor(categoriesWidth / categorySize)); // Учитываем место, занятое переключателями кампаний.
         addCategoryButton(categories, null, categorySize); // Первая вкладка — «Всё», значок пустой папки.
         for (var i = 0; i < Category.all.length; i++) {
             if ((i + 1) % categoryColumns == 0) categories.row(); // Учитываем уже добавленную первую вкладку.
             addCategoryButton(categories, Category.all[i], categorySize); //добавление кнопки
         }
-        left.add(categories).growX().padTop(8).padBottom(8); // Отделяем категории от поиска сверху и списка блоков снизу.
+        filters.add(categories).width(categoriesWidth).top();
+        left.add(filters).growX().padTop(8).padBottom(8); // Отделяем оба набора кнопок от поиска и списка блоков.
         left.row();
 
         // ЛЕВАЯ ЧАСТЬ: ТАБЛИЦА БЛОКОВ
