@@ -3,6 +3,7 @@
 // API виджетов: https://github.com/Anuken/Arc/tree/master/arc-core/src/arc/scene/ui
 // Категории и иконки: mindustry.ui.fragments.PlacementFragment версии игры.
 "use strict"; // В частности, запрещает случайное присваивание не объявленной переменной.
+var uiSounds = require("sounds"); // Общий модуль уже загружает только четыре используемых звука.
 
 // ------------------------------------------------------------
 // СОЗДАНИЕ РЕДАКТОРА И ЕГО СОСТОЯНИЕ
@@ -120,9 +121,12 @@ exports.create = function(api) {
 
     function assignBlock(block) { //назначаем блок в "колсе выбора"
         if (editedSector < 0) return;
+        var previousBlock = api.getBlock(editedWheel, editedSector);
         api.setBlock(editedWheel, editedSector, block);
         saveSlot();
         refreshSectorControls();
+        if (block != null) uiSounds.play(uiSounds.addBlock);//проигрываем звук добавлени блока
+        else if (previousBlock != null) uiSounds.play(uiSounds.deleteBlock); // Уже пустой слот не издаёт звук удаления.
     }
 
     // ------------------------------------------------------------
@@ -135,6 +139,7 @@ exports.create = function(api) {
         var button = cell.get(); // Из ячейки Cell получаем сам Java-объект кнопки.
         button.resizeImage(32); // Размер картинки внутри кнопки; сама кнопка остаётся размером 48.
         button.setProgrammaticChangeEvents(false); // Изменения состояния кнопки из кода не порождают ChangeEvent.
+        uiSounds.muteDefaultClick(button); // Назначение блока использует add_block_1 вместо стандартного звука интерфейся.
         blockButtons.push({button: button, block: block}); // Сохраняем связь изображения-кнопки с соответствующим блоком.
     }
 
@@ -244,7 +249,12 @@ exports.create = function(api) {
         var crossSize = Math.min(Scl.scl(32), previewSize * 0.18);
         clearSelectionButton.setSize(crossSize, crossSize);
         clearSelectionButton.setPosition(previewSize - crossSize, previewSize - crossSize); // Верхний правый угол манекена.
-        clearSelectionButton.clicked(() => selectSector(-1)); // Снимает выделение, сохраняя блок и размер иконки в слоте.
+        clearSelectionButton.clicked(() => {
+            if (editedSector < 0) return;
+            selectSector(-1); // Снимает выделение, сохраняя блок и размер иконки в слоте.
+            uiSounds.play(uiSounds.deleteBlock);//проигрываем звук удаления блока
+        });
+        uiSounds.muteDefaultClick(clearSelectionButton);
         clearSelectionButton.addListener(new Tooltip(table => table.add("Снять выделение сектора")));
         group.addChild(clearSelectionButton);
 
@@ -253,6 +263,7 @@ exports.create = function(api) {
         clearSlotButton.setSize(crossSize, crossSize); // Обе угловые кнопки у 'манекена' одинакового размера.
         clearSlotButton.setPosition(0, previewSize - crossSize); // Освободившийся верхний левый угол 'Сброс блока'.
         clearSlotButton.clicked(() => assignBlock(null)); // Очищаем и сохраняем слот; зелёное выделение и масштаб остаются.
+        uiSounds.muteDefaultClick(clearSlotButton);
         clearSlotButton.addListener(new Tooltip(table => table.add("Удалить блок из сектора")));
         group.addChild(clearSlotButton);
         return group;

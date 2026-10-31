@@ -1,6 +1,7 @@
 // Общая основа игрового колеса и манекена: внешний вид, геометрия и создание Element.
 // Подключение модуля ничего не рисует; main.js вызывает create после ClientLoadEvent.
 "use strict";
+var uiSounds = require("sounds"); // Этот же модуль использует меню; файлы звуков загружаются один раз.
 
 exports.create = function(api) {
     var sectorCount = 8;
@@ -85,7 +86,7 @@ exports.create = function(api) {
     function drawSector(centerX, centerY, radius, sector) {
         var innerRadius = radius * appearance.innerRadiusRatio;
         var start = sector * sectorAngle - sectorAngle / 2; //угол левой линии нужного сектора
-        for (var part = 0; part < 6; part++) { //тут можно будет настроить круговитость или убрать вовсе; фактически один сектор состоит из 5 многоукголинокв
+        for (var part = 0; part < 6; part++) { // Сектор состоит из шести четырёхугольников; больше частей даёт более плавную дугу.
             var angleA = (start + sectorAngle * part / 6) * Math.PI / 180;
             var angleB = (start + sectorAngle * (part + 1) / 6) * Math.PI / 180;
             var sinA = Math.sin(angleA), cosA = Math.cos(angleA);
@@ -170,11 +171,27 @@ exports.create = function(api) {
     // Фабрика — аналог метода Java, создающего настроенный анонимный наследник Element.
     // Каждый вызов создаёт отдельный виджет-колесо, но геометрия и appearance у обоих общие.
     function createElement(options) {
-        var methods = { // кастомное поведение для перезаписи стандартных методов
+        var previousHoveredSector = -1;
+        var previousWheelNumber = -1;
+        var methods = { // Переопределения Element и дополнительный метод resetHoverSound.
+            resetHoverSound: function() {
+                previousHoveredSector = -1;
+                previousWheelNumber = -1; // Скрытие и повторное открытие могут произойти до следующего события exit сцены.
+            },
             draw: function() {
-                if (options.canDraw != null && !options.canDraw()) return; //услвия запуска в main.js
+                if (options.canDraw != null && !options.canDraw()) {
+                    previousHoveredSector = -1;
+                    return;
+                }
+                var wheelNumber = options.getWheelNumber();
+                var hoveredSector = hoveredSectorAt(this);
                 var selectedSector = options.getSelectedSector == null ? -1 : options.getSelectedSector();
-                draw(this, options.getWheelNumber(), hoveredSectorAt(this), selectedSector, options);
+                draw(this, wheelNumber, hoveredSector, selectedSector, options);
+                if (hoveredSector != -1 && (hoveredSector != previousHoveredSector || wheelNumber != previousWheelNumber)) {
+                    uiSounds.play(uiSounds.sectorHover); // Проигрываем звук наведения мышкой на сектор 
+                }
+                previousHoveredSector = hoveredSector;
+                previousWheelNumber = wheelNumber;
             }
         };
         // 'Колесо выбора' заменяет hit для захвата всего экрана.
@@ -182,6 +199,16 @@ exports.create = function(api) {
         if (options.hit != null) methods.hit = options.hit; //Если в объекте настроек передан кастомный метод, то добавим его в создаваемый набор методов methods.hit (зона клика мышки по виджету)
         var element = extend(Element, methods); //UI-виджет кастомных методов
         element.setSize(appearance.diameter, appearance.diameter);
+
+        //сброс состояния наведения при входе курсора мыши в область колеса или выходе
+        element.addListener(extend(InputListener, {
+            enter: function(event, x, y, pointer, fromActor) {
+                if (pointer == -1) previousHoveredSector = -1; // Новое наведение не зависит от сектора, запомненного перед закрытием.
+            },
+            exit: function(event, x, y, pointer, toActor) {
+                if (pointer == -1) previousHoveredSector = -1; // При возврате мыши или повторном открытии звук должен сработать снова.
+            }
+        }));
         return element;
     }
 

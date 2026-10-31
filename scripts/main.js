@@ -6,6 +6,7 @@
 // 3) require выполняется при загрузке скрипта; само меню создаётся после ClientLoadEvent.
 var menuModule = require("menu"); // настройки
 var wheelModule = require("wheel"); // 'колесо выбора'
+var uiSounds = require("sounds"); // Загрузка файлов звуков начинается до ClientLoadEvent.
 
 // ClientLoadEvent вызывается после загрузки клиентской части игры
 // когда клиентский интерфейс уже создан.
@@ -67,8 +68,8 @@ Events.on(ClientLoadEvent, () => {
     var wheel = wheelView.createElement({
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
-        getIconAlpha: function(block) {//проверяем на возможность строить в данном мире и при данных ресурсах
-            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30; //если можем разместить - null, нет? - 0.30 прозрачности
+        getIconAlpha: function(block) {// Проверяем доступность блока в этом мире; количество ресурсов здесь не проверяется.
+            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30; // Доступный блок полностью непрозрачен (1), недоступный рисуется с alpha 0.30.
         },
 
         // Открытие колеса делает областью для клика весь экран.
@@ -88,6 +89,7 @@ Events.on(ClientLoadEvent, () => {
 
     //Закрытие колеса при выходе в меню или сбросе мира.
     function closeWheel() {
+        wheel.resetHoverSound(); // Повторное открытие начинает новую историю звука наведения.
         wheelOpen = false;
         activeWheelNumber = -1;
         wheel.visible = false;
@@ -184,6 +186,7 @@ Events.on(ClientLoadEvent, () => {
             input.linePlans.clear();
             if (input instanceof DesktopInput) input.mode = PlaceMode.none;
             input.block = selection.block;
+            uiSounds.play(uiSounds.sectorSelect); // Только после успешного выбора; отменённая задача звука не издаёт.
         });
     }
 
