@@ -20,6 +20,10 @@ exports.create = function(api) {
         lineColor: Color.white.cpy(),
         lineAlpha: 0.55,
         lineWidth: 1,
+        innerLineColor: Color.white.cpy(), // Обводка центра настраивается отдельно от разделителей секторов.
+        innerLineAlpha: 0.55,
+        innerLineWidth: 1,
+        outerColor: Color.white.cpy(),
         outerAlpha: 0.70, //прозрачность линии обводки внешеней границы колеса
         outerWidth: 2,  //толщина линии обводки внешеней границы колеса
         outerInset: 1,  //отступ пикселей обводки внешеней границы колеса во внутрь (бесполезная ли переменная это? Можно и автоматизировать)
@@ -31,6 +35,24 @@ exports.create = function(api) {
         selectionAlpha: 0.45,
         selectionHoverMix: 0.5 // Доля цвета наведения в выбранном секторе: 0 — только выделение, 1 — только наведение.
     };
+
+    // Снимок исходного вида для кнопок сброса. Цвета копируем, чтобы их настройка не меняла образец.
+    var appearanceDefaults = {};
+    for (var key in appearance) {
+        var value = appearance[key];
+        appearanceDefaults[key] = value instanceof Color ? value.cpy() : value;
+    }
+
+    // Сбрасываем только перечисленные параметры. Ссылки на текущие цвета остаются действительными.
+    function resetAppearance(keys) {
+        for (var i = 0; i < keys.length; i++) {
+            var key = keys[i];
+            if (!appearanceDefaults.hasOwnProperty(key)) continue;
+            var value = appearanceDefaults[key];
+            if (value instanceof Color) appearance[key].set(value);
+            else appearance[key] = value;
+        }
+    }
 
     //=====================================================================
     //Запоминание и расчёта цвета для 'зелёного' сектора (ещё и) выделенного мышкой
@@ -126,20 +148,29 @@ exports.create = function(api) {
         Draw.color(appearance.centerColor);
         Draw.alpha(appearance.centerAlpha);
         Fill.circle(centerX, centerY, innerRadius);//Закрашиваем внутренний круг
+        if (appearance.innerLineWidth > 0 && innerRadius > 0) {
+            Draw.color(appearance.innerLineColor);
+            Draw.alpha(appearance.innerLineAlpha);
+            Lines.stroke(appearance.innerLineWidth);
+            Lines.circle(centerX, centerY, innerRadius);//Рисуем отдельную обводку внутреннего круга.
+        }
+
+        // Нулевая толщина скрывает разделители, но не иконки секторов.
         Draw.color(appearance.lineColor);
         Draw.alpha(appearance.lineAlpha);
-        Lines.stroke(appearance.lineWidth);
-        Lines.circle(centerX, centerY, innerRadius);//рисуем обводку-окружность внутреннего круга
+        if (appearance.lineWidth > 0) Lines.stroke(appearance.lineWidth);
 
         for (var sector = 0; sector < sectorCount; sector++) {
             var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180;
             // границы-линии разделяющие сектора по их колличеству
-            Lines.line(
-                centerX + Math.sin(boundary) * innerRadius,
-                centerY + Math.cos(boundary) * innerRadius,
-                centerX + Math.sin(boundary) * radius,
-                centerY + Math.cos(boundary) * radius
-            );
+            if (appearance.lineWidth > 0) {
+                Lines.line(
+                    centerX + Math.sin(boundary) * innerRadius,
+                    centerY + Math.cos(boundary) * innerRadius,
+                    centerX + Math.sin(boundary) * radius,
+                    centerY + Math.cos(boundary) * radius
+                );
+            }
 
             //рисуем блоки в секторах (а если блока нет? - не рисуем)
             var block = api.getBlock(wheelNumber, sector);
@@ -161,10 +192,13 @@ exports.create = function(api) {
         }
 
         //рисуем внешнюю обводку-окружность
-        Draw.color(appearance.lineColor); //не дублирование, так как там может быть block = null
-        Draw.alpha(appearance.outerAlpha);
-        Lines.stroke(appearance.outerWidth);
-        Lines.circle(centerX, centerY, radius - appearance.outerInset);
+        var outerRadius = radius - appearance.outerInset;
+        if (appearance.outerWidth > 0 && outerRadius > 0) {
+            Draw.color(appearance.outerColor);
+            Draw.alpha(appearance.outerAlpha);
+            Lines.stroke(appearance.outerWidth);
+            Lines.circle(centerX, centerY, outerRadius);
+        }
         Draw.reset(); // В Arc сбрасывает цвет, прозрачность и толщину линий для следующего элемента UI.
     }
 
@@ -214,6 +248,8 @@ exports.create = function(api) {
 
     return {
         appearance: appearance,
+        appearanceDefaults: appearanceDefaults,
+        resetAppearance: resetAppearance,
         sectorCount: sectorCount,
         sectorAt: sectorAt,
         createElement: createElement

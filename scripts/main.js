@@ -135,6 +135,7 @@ Events.on(ClientLoadEvent, () => {
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
         wheelView: wheelView, // Тот же объект основы, с appearance, передаём манекену по ссылке.
+        resizeWheel: function() { wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); },
         closeWheel: closeWheel
     });
 

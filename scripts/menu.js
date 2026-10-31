@@ -4,6 +4,7 @@
 // Категории и иконки: mindustry.ui.fragments.PlacementFragment версии игры.
 "use strict"; // В частности, запрещает случайное присваивание не объявленной переменной.
 var uiSounds = require("sounds"); // Общий модуль уже загружает только четыре используемых звука.
+var appearanceMenuModule = require("appearance-menu"); // Поля внешнего вида и сохранение их значений.
 
 // ------------------------------------------------------------
 // СОЗДАНИЕ РЕДАКТОРА И ЕГО СОСТОЯНИЕ
@@ -40,7 +41,16 @@ exports.create = function(api) {
     var campaignPressedBackground = Tex.whiteui.tint(Color.valueOf("707070"));
     var gridColumns = 1;
     var previewSize = 0; // Диаметр манекена в координатах сцены; берём из общих настроек колеса.
+    var previewWidget, previewGroup, previewEditor;
+    var previewCell, scaleSliderCell, sectorLabelCell, rightPanelCell;
+    var baseRightWidth = 0;
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
+
+    var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => {
+        settingsChanged = true;
+        if (diameterChanged) resizePreview(); // Меняем геометрию без пересоздания полей и потери клавиатурного фокуса.
+    });
+    if (api.resizeWheel != null) api.resizeWheel(); // В том числе применяем сохранённый диаметр к игровому колесу.
 
     // ------------------------------------------------------------
     // КЛЮЧИ НАСТРОЕК И ПРОВЕРКА НОМЕРОВ
@@ -289,6 +299,8 @@ exports.create = function(api) {
             getSelectedSector: function() { return editedSector; } // Здесь указано постоянное выделение, 'зелёный' сектор. Наведение мышки на сектор определяет 'общая фабрика'.
             // *getIconAlpha убран: 'манекен' показывает и недоступные блоки с полной непрозрачностью
         });
+        previewWidget = preview;
+        previewGroup = group;
         preview.name = "buildwheel-preview";
 
         // Регистрируем нажатие на 'манекен', ожидание события
@@ -326,6 +338,27 @@ exports.create = function(api) {
         return group;
     }
 
+    // Диаметр меняет и круг, и его место в таблицах. Угловые кнопки остаются у новых краёв манекена.
+    function resizePreview() {
+        if (api.resizeWheel != null) api.resizeWheel();
+        if (previewWidget == null) return;
+        previewSize = wheelView.appearance.diameter;
+        var uiSize = previewSize / Scl.scl();
+        previewWidget.setSize(previewSize, previewSize);
+        previewGroup.setSize(previewSize, previewSize);
+        previewCell.size(uiSize);
+        scaleSliderCell.height(uiSize);
+        var crossSize = Math.min(Scl.scl(32), previewSize * 0.18);
+        clearSelectionButton.setSize(crossSize, crossSize);
+        clearSlotButton.setSize(crossSize, crossSize);
+        clearSelectionButton.setPosition(previewSize - crossSize, previewSize - crossSize);
+        clearSlotButton.setPosition(0, previewSize - crossSize);
+        var rightWidth = Math.max(baseRightWidth, uiSize + 36);
+        sectorLabelCell.width(rightWidth);
+        rightPanelCell.width(rightWidth);
+        previewEditor.invalidateHierarchy(); // Пересчитываем и таблицу манекена, и содержащие её таблицы.
+    }
+
     // Указывает сцене, какой ScrollPane должен получать вращение колёсика.
     // Проверка isShown не даёт отложенной задаче забрать фокус после закрытия меню.
     function focusBlockList() {
@@ -345,7 +378,9 @@ exports.create = function(api) {
         var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
         previewSize = wheelView.appearance.diameter; // Один источник размера для манекена и игрового колеса.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
-        var rightWidth = Math.max(contentWidth * 0.45, previewUiSize + 36); // 45% или не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
+        var appearanceWidth = Math.max(200, Math.min(contentWidth * 0.45, 560)); // Поля не растягиваются вслед за большим диаметром.
+        baseRightWidth = Math.max(contentWidth * 0.45, appearanceWidth);
+        var rightWidth = Math.max(baseRightWidth, previewUiSize + 36); // Не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
@@ -437,7 +472,8 @@ exports.create = function(api) {
         right.row();
 
         // ПРАВАЯ ЧАСТЬ: ТЕКСТОВАЯ СТРОКА ИМЕНИ БЛОКА СЕКТОРА
-        sectorLabel = right.add("").width(rightWidth).get();
+        sectorLabelCell = right.add("").width(rightWidth);
+        sectorLabel = sectorLabelCell.get();
         sectorLabel.setWrap(true); // автоматический перенос длинного текста на новую строк
         right.row();
         scaleLabel = right.add("").growX().padTop(6).padBottom(6).get(); //вывод выбранного блока в секторе
@@ -445,6 +481,7 @@ exports.create = function(api) {
 
         // ПРАВАЯ ЧАСТЬ: ПОЛЗУНОК РАЗМЕРА ИКОНКИ
         var editor = new Table();
+        previewEditor = editor;
         scaleSlider = new Slider(40, 200, 1, true); // Размер 40–200%, шаг 1%; true — вертикальный ползунок слева от круга.
         scaleSlider.name = "buildwheel-icon-scale";
         scaleSlider.moved(value => {
@@ -453,10 +490,12 @@ exports.create = function(api) {
             scaleLabel.setText("Размер иконки: " + Math.round(value) + "%");
             saveSlot(); // Обновляем данные Core.settings в памяти; файл здесь ещё не записывается.
         });
-        editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8); // Ползунок по высоте равен манекену; ширина и отступ заданы в UI-единицах.
-        editor.add(createPreview()).size(previewUiSize); // После масштабирования Cell размер совпадёт с диаметром игрового колеса.
+        scaleSliderCell = editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8); // Ползунок по высоте равен манекену; ширина и отступ заданы в UI-единицах.
+        previewCell = editor.add(createPreview()).size(previewUiSize); // После масштабирования Cell размер совпадёт с диаметром игрового колеса.
         right.add(editor).top();
-        body.add(right).width(rightWidth).padLeft(12).top();//добавляем панель с отступом слева в 12 пикселей
+        right.row();
+        right.add(appearanceEditor.build(appearanceWidth)).width(appearanceWidth).left().padTop(12);
+        rightPanelCell = body.add(right).width(rightWidth).padLeft(12).top(); // Ячейку сохраняем для изменения диаметра без перестроения меню.
 
 
         var contentPane = new ScrollPane(body, Styles.defaultPane); //помещаем всё меню настроек в контейнер прокрутки, защищая от обрезки при малом разрешении
