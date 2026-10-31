@@ -4,8 +4,8 @@
 // Исходники: https://github.com/Anuken/Arc/tree/master/arc-core/src/arc
 
 // 3) require выполняется при загрузке скрипта; само меню создаётся после ClientLoadEvent.
-var menuModule = require("menu");
-var wheelModule = require("wheel"); // Общая основа игрового колеса и манекена загружается один раз.
+var menuModule = require("menu"); // настройки
+var wheelModule = require("wheel"); // 'колесо выбора'
 
 // ClientLoadEvent вызывается после загрузки клиентской части игры
 // когда клиентский интерфейс уже создан.
@@ -31,12 +31,12 @@ Events.on(ClientLoadEvent, () => {
     // временно раскомментировать: колесо 1, северный сектор — конвейер.
     // wheelSlots[1][0] = Blocks.conveyor;
 
-    // Единственная основа для двух виджетов. Функции передают актуальные блоки и масштабы,
-    // не копируя их: изменения в редакторе сразу доступны игровому колесу.
+    // Объект-основа, а так же универсальные функции: определение сохранённых блоков и их масштабы. (Для обоих виджетов ('колеса выбора' и 'манекена').)
     var wheelView = wheelModule.create({
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         getIconScale: function(w, s) { return settingsMenu.getIconScale(w, s); } // Вызывается при рисовании, когда settingsMenu уже создано ниже.
     });
+
     // Захваченные кнопки удерживаем до отпускания даже после закрытия колеса.
     // Иначе игра получит отпускание без нажатия и может завершить свой жест.
     var capturedLeft = false;
@@ -44,8 +44,7 @@ Events.on(ClientLoadEvent, () => {
     var pendingSelection = null; // Запрос выбора, ожидающий выполнения в очереди приложения.
     var settingsMinusCaptured = false; // Минус открыл настройки: его отпускание тоже не отдаём игре.
 
-    // Определяем наличие курсора на одном из секторов
-    // Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
+    // Определяем наличие курсора на одном из секторов (в wheel.js). Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
     function sectorAt(stageX, stageY) {
         // wheel находится прямо в корне сцены: вычитание его позиции даёт локальные координаты.
         return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y);
@@ -64,18 +63,17 @@ Events.on(ClientLoadEvent, () => {
     //==============================================================
     // 1) Создаём объект wheel - полупрозрачный шаблон колеса выбора.
     //==============================================================
-    // Общая фабрика создаёт Element. Здесь задаём только поведение игрового режима.
+    // Общая фабрика создаёт Element. Здесь задаём только поведение 'колеса выбора'.
     var wheel = wheelView.createElement({
-        canDraw: function() { return wheelOpen && Vars.state.isGame(); },
-        getWheelNumber: function() { return activeWheelNumber; },
-        getHighlightedSector: function() {
+        canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
+        getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
+        getHighlightedSector: function() {//подсвеченный сектор
             mousePosition.set(Core.input.mouseX(), Core.input.mouseY());
             Core.scene.screenToStageCoordinates(mousePosition);
             return sectorAt(mousePosition.x, mousePosition.y);
         },
-        getIconAlpha: function(block) {
-            // Запрещённый блок остаётся выбираемым для предпросмотра, но рисуется тускло.
-            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30;
+        getIconAlpha: function(block) {//проверяем на возможность строить в данном мире и при данных ресурсах
+            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30; //если можем разместить - null, нет? - 0.30 прозрачности
         },
 
         // Открытие колеса делает областью для клика весь экран.
@@ -139,7 +137,7 @@ Events.on(ClientLoadEvent, () => {
     var settingsMenu = menuModule.create({
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
-        wheelView: wheelView, // Тот же объект основы, включая appearance, передаём манекену по ссылке.
+        wheelView: wheelView, // Тот же объект основы, с appearance, передаём манекену по ссылке.
         closeWheel: closeWheel
     });
 

@@ -225,13 +225,12 @@ exports.create = function(api) {
         var preview = wheelView.createElement({
             getWheelNumber: function() { return editedWheel; },
             getHighlightedSector: function() { return editedSector; },
-            highlightColor: Color.green,
-            highlightAlpha: 0.45 // Зелёное выделение сохраняется до выбора другого сектора или снятия выделения.
-            // getIconAlpha не задаём: редактор показывает и недоступные блоки с полной яркостью.
+            highlightColor: Color.green, // Зелёное выделение сохраняется до выбора другого сектора или снятия выделения.
+            highlightAlpha: 0.45 // getIconAlpha не задаём: редактор показывает и недоступные блоки с полной яркостью.            
         });
         preview.name = "buildwheel-preview";
-        // Здесь InputListener самого элемента, а не глобальный InputProcessor.
-        // Поэтому x/y уже локальные: начало координат находится в углу манекена.
+
+        // Регистрируем нажатие на 'манекен', ожидание события
         preview.addListener(extend(InputListener, {
             touchDown: function(event, x, y, pointer, button) {
                 if (button != KeyCode.mouseLeft) return false;
