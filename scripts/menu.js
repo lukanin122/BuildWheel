@@ -13,8 +13,9 @@
 // exports — публичная часть модуля. api содержит только функции и параметры,
 // явно переданные из main.js; обратного require("main") здесь нет.
 exports.create = function(api) {
+    var wheelView = api.wheelView; // Общая основа с игровым колесом; настройки внешнего вида не копируем.
     var wheelCount = 10; // Номер колеса 0–9.
-    var sectorCount = 8;
+    var sectorCount = wheelView.sectorCount;
     var settingsPrefix = "buildwheel.slot."; // Начало ключей Core.settings: отделяет наши настройки от настроек других модов.
     var iconScales = []; // Таблица [колесо][сектор]: 1 = 100%, 0.4 = 40%, 2 = 200%.
     var settingsChanged = false; // Условие вынуждающее к записи данных на диск.
@@ -33,7 +34,7 @@ exports.create = function(api) {
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
     var categoryButtons = []; // Такие же записи для вкладок категорий.
     var gridColumns = 1;
-    var previewSize = 0; // Диаметр манекена в координатах сцены; получаем от игрового колеса в main.js.
+    var previewSize = 0; // Диаметр манекена в координатах сцены; берём из общих настроек колеса.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
 
     // ------------------------------------------------------------
@@ -221,63 +222,21 @@ exports.create = function(api) {
         // Group абстрактный: extend создаёт его конкретного анонимного наследника.
         var group = extend(Group, {});
         group.setTransform(false); // Группа объединяет круг и крестик; собственные поворот и масштаб ей не нужны.
-        var preview = extend(Element, {
-            draw: function() {
-                var radius = this.getWidth() / 2;
-                var cx = this.x + radius, cy = this.y + this.getHeight() / 2; // Центр круга с учётом положения элемента внутри его группы.
-                var inner = radius * api.innerRadiusRatio;
-                Draw.color(Color.white);
-                Draw.alpha(0.22);
-                Fill.circle(cx, cy, radius);
-                if (editedSector >= 0) {
-                    Draw.color(Color.green);
-                    Draw.alpha(0.45);
-                    // Та же функция подсветки, что используется игровым колесом.
-                    api.drawSector(cx, cy, radius, editedSector);
-                }
-                Draw.color(Color.black);
-                Draw.alpha(0.25);
-                Fill.circle(cx, cy, inner);
-                Draw.color(Color.white);
-                Draw.alpha(0.70);
-                Lines.stroke(1);
-                Lines.circle(cx, cy, inner);
-                Lines.circle(cx, cy, radius - 1);
-                for (var sector = 0; sector < sectorCount; sector++) {
-                    var edge = (sector * 45 - 22.5) * Math.PI / 180;
-                    Lines.line(cx + Math.sin(edge) * inner, cy + Math.cos(edge) * inner,
-                        cx + Math.sin(edge) * radius, cy + Math.cos(edge) * radius);
-                    var block = api.getBlock(editedWheel, sector);
-                    if (block != null) {
-                        var angle = sector * 45 * Math.PI / 180;
-                        var icon = block.uiIcon;
-                        var size = radius * 0.28 * getIconScale(editedWheel, sector); // Манекен использует тот же базовый размер и индивидуальный масштаб, что игровое колесо.
-                        var scale = size / Math.max(icon.width, icon.height); // Сохраняем пропорции картинки.
-                        Draw.alpha(1);
-                        Draw.rect(icon, cx + Math.sin(angle) * radius * 0.64,
-                            cy + Math.cos(angle) * radius * 0.64,
-                            icon.width * scale, icon.height * scale);
-                        Draw.alpha(0.70);
-                    }
-                }
-                Draw.reset(); // Цвет и прозрачность не должны повлиять на следующий виджет меню.
-            }
+        var preview = wheelView.createElement({
+            getWheelNumber: function() { return editedWheel; },
+            getHighlightedSector: function() { return editedSector; },
+            highlightColor: Color.green,
+            highlightAlpha: 0.45 // Зелёное выделение сохраняется до выбора другого сектора или снятия выделения.
+            // getIconAlpha не задаём: редактор показывает и недоступные блоки с полной яркостью.
         });
         preview.name = "buildwheel-preview";
-        preview.setSize(previewSize, previewSize);
         // Здесь InputListener самого элемента, а не глобальный InputProcessor.
         // Поэтому x/y уже локальные: начало координат находится в углу манекена.
         preview.addListener(extend(InputListener, {
             touchDown: function(event, x, y, pointer, button) {
                 if (button != KeyCode.mouseLeft) return false;
-                var radius = preview.getWidth() / 2;
-                var dx = x - radius, dy = y - radius;
-                var distance = dx * dx + dy * dy; // Несмотря на имя, это квадрат расстояния: сравниваем с квадратами радиусов.
-                var inner = radius * api.innerRadiusRatio;
-                if (distance >= inner * inner && distance <= radius * radius) { // Только точки на кольце могут выбрать сектор; центр и углы прямоугольника пропускаем.
-                    var angle = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
-                    selectSector(Math.floor((angle + 22.5) / 45) % 8); // Та же нумерация секторов: от севера по часовой стрелке.
-                }
+                var sector = wheelView.sectorAt(preview, x, y); // Те же границы кольца и нумерация, что в игре.
+                if (sector != -1) selectSector(sector); // Центр и углы не меняют выбранный сектор.
                 return true;
             }
         }));
@@ -318,7 +277,7 @@ exports.create = function(api) {
         var screenHeight = Core.scene.getHeight() / Scl.scl();// размеры сцены в UI-единицы, сохраняя доли экрана при любом масштабе UI.
         var contentWidth = screenWidth * 0.92; // Всё содержимое занимает 92% ширины экрана.
         var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
-        previewSize = api.getWheelDiameter(); // Тот же диаметр, что у игрового колеса; от размеров окна не зависит.
+        previewSize = wheelView.appearance.diameter; // Один источник размера для манекена и игрового колеса.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
         var rightWidth = Math.max(contentWidth * 0.45, previewUiSize + 36); // 45% или не меньше манекена + 36 (ползунок шириной 28 и отступ 8).
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.

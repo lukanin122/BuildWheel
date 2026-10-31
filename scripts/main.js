@@ -5,11 +5,11 @@
 
 // 3) require выполняется при загрузке скрипта; само меню создаётся после ClientLoadEvent.
 var menuModule = require("menu");
+var wheelModule = require("wheel"); // Общая основа игрового колеса и манекена загружается один раз.
 
 // ClientLoadEvent вызывается после загрузки клиентской части игры
 // когда клиентский интерфейс уже создан.
 Events.on(ClientLoadEvent, () => {
-    var wheelDiameter = 260; // Пока диаметр общий для всех колёс; настройка размера будет в пункте 4.2.
     var wheelOpen = false; // wheelOpen отвечает за показ и отрисовку колеса
     var activeWheelNumber = -1; // Номер последнего открытого колеса 0-9, дефолт -1
     var mousePosition = new Vec2(); 
@@ -31,8 +31,12 @@ Events.on(ClientLoadEvent, () => {
     // временно раскомментировать: колесо 1, северный сектор — конвейер.
     // wheelSlots[1][0] = Blocks.conveyor;
 
-    var innerRadiusRatio = 0.24; // Центр без сектора - в долях от круга.
-    var sectorAngle = 360 / 8; // Угол сектора в градусах.
+    // Единственная основа для двух виджетов. Функции передают актуальные блоки и масштабы,
+    // не копируя их: изменения в редакторе сразу доступны игровому колесу.
+    var wheelView = wheelModule.create({
+        getBlock: function(w, s) { return wheelSlots[w][s]; },
+        getIconScale: function(w, s) { return settingsMenu.getIconScale(w, s); } // Вызывается при рисовании, когда settingsMenu уже создано ниже.
+    });
     // Захваченные кнопки удерживаем до отпускания даже после закрытия колеса.
     // Иначе игра получит отпускание без нажатия и может завершить свой жест.
     var capturedLeft = false;
@@ -43,17 +47,8 @@ Events.on(ClientLoadEvent, () => {
     // Определяем наличие курсора на одном из секторов
     // Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
     function sectorAt(stageX, stageY) {
-        var radius = wheel.getWidth() / 2;
-        var dx = stageX - (wheel.x + radius);
-        var dy = stageY - (wheel.y + wheel.getHeight() / 2);//Координаты мыши относительно колеса
-        
-        var distanceSquared = dx * dx + dy * dy;
-        var innerRadius = radius * innerRadiusRatio;
-        if (distanceSquared < innerRadius * innerRadius
-            || distanceSquared > radius * radius) return -1;// Курсор вне кольца или в центре — отмена выбора.
-
-        var angle = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360; //Угол направления от центра к точке от севера по часовой стрелке
-        return Math.floor((angle + sectorAngle / 2) / sectorAngle) % 8; //возвращает сектор 0–7 или -1. Половина угла сектора плюсуется для отсчёта ровно по северу сектора.
+        // wheel находится прямо в корне сцены: вычитание его позиции даёт локальные координаты.
+        return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y);
     }
 
     function canSelectBlock(block) {
@@ -66,97 +61,21 @@ Events.on(ClientLoadEvent, () => {
             && block.supportsEnv(Vars.state.rules.env);
     }
 
-    // Рисуем подсветку целевого сектора шестью небольшими четырёхугольниками.
-    // Все углы, как и в sectorAt, отсчитываются от севера по часовой стрелке.
-    function drawSector(centerX, centerY, radius, sector) {
-        var innerRadius = radius * innerRadiusRatio;
-        var start = sector * sectorAngle - sectorAngle / 2;
-        for (var part = 0; part < 6; part++) {
-            var angleA = (start + sectorAngle * part / 6) * Math.PI / 180;
-            var angleB = (start + sectorAngle * (part + 1) / 6) * Math.PI / 180;
-            var sinA = Math.sin(angleA), cosA = Math.cos(angleA);
-            var sinB = Math.sin(angleB), cosB = Math.cos(angleB);
-            Fill.quad(
-                centerX + sinA * innerRadius, centerY + cosA * innerRadius,
-                centerX + sinA * radius, centerY + cosA * radius,
-                centerX + sinB * radius, centerY + cosB * radius,
-                centerX + sinB * innerRadius, centerY + cosB * innerRadius
-            );
-        }
-    }
-
     //==============================================================
     // 1) Создаём объект wheel - полупрозрачный шаблон колеса выбора.
     //==============================================================
-    // extend создаёт наследника Element (элемент интерфейса Arc) и переопределяет его метод draw().
-    var wheel = extend(Element, {
-        draw: function() {
-            if (!wheelOpen || !Vars.state.isGame()) return;
-
-            var radius = this.width / 2;
-            var centerX = this.x + radius;
-            var centerY = this.y + this.height / 2;
-
-            Draw.color(Color.white);// Цвет фона колеса.
-            Draw.alpha(0.22);
-            Fill.circle(centerX, centerY, radius);
-
-            //Подсветка сектора от наведённой мышки; центр остаётся зоной отмены.
+    // Общая фабрика создаёт Element. Здесь задаём только поведение игрового режима.
+    var wheel = wheelView.createElement({
+        canDraw: function() { return wheelOpen && Vars.state.isGame(); },
+        getWheelNumber: function() { return activeWheelNumber; },
+        getHighlightedSector: function() {
             mousePosition.set(Core.input.mouseX(), Core.input.mouseY());
             Core.scene.screenToStageCoordinates(mousePosition);
-            var hoveredSector = sectorAt(mousePosition.x, mousePosition.y);
-            if (hoveredSector != -1) {
-                Draw.color(Pal.accent);
-                Draw.alpha(0.35);
-                drawSector(centerX, centerY, radius, hoveredSector);
-            }
-
-            var innerRadius = radius * innerRadiusRatio;
-            Draw.color(Color.black);
-            Draw.alpha(0.25);
-            Fill.circle(centerX, centerY, innerRadius);//внутренний круг
-            Draw.color(Color.white);
-            Draw.alpha(0.55);
-            Lines.stroke(1);
-            Lines.circle(centerX, centerY, innerRadius);//обводка внутреннего круга
-
-            //Восемь линий, разделяющих кольцо на секторы
-            for (var sector = 0; sector < 8; sector++) {
-                var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180;//Вычисляет угол очередного разделителя
-                Lines.line(
-                    centerX + Math.sin(boundary) * innerRadius,//
-                    centerY + Math.cos(boundary) * innerRadius,
-                    centerX + Math.sin(boundary) * radius,
-                    centerY + Math.cos(boundary) * radius
-                );
-
-                // Пустой слот не рисует иконку. Недоступный блок рисуется тускло.
-                var block = wheelSlots[activeWheelNumber][sector];
-                if (block != null) {
-                    var direction = sector * sectorAngle * Math.PI / 180;
-                    var icon = block.uiIcon;
-                    var iconSize = radius * 0.28 * settingsMenu.getIconScale(activeWheelNumber, sector);
-                    // Сохраняем пропорции исходной иконки в квадрате iconSize.
-                    var iconScale = iconSize / Math.max(icon.width, icon.height);
-                    Draw.color(Color.white);
-                    // Доступность выбора и возможность постройки — разные вещи:
-                    // тусклый запрещённый блок остаётся выбираемым, как в меню игры.
-                    Draw.alpha(canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30);
-                    Draw.rect(icon,
-                        centerX + Math.sin(direction) * radius * 0.64,
-                        centerY + Math.cos(direction) * radius * 0.64,
-                        icon.width * iconScale, icon.height * iconScale
-                    );
-                    // Возвращаем цвет разделителей для следующего сектора.
-                    Draw.alpha(0.55);
-                }
-            }
-
-            Draw.alpha(0.70);
-            Lines.stroke(2);
-            Lines.circle(centerX, centerY, radius - 1);
-
-            Draw.reset(); // Сбрасывает цвет, прозрачность и толщину линий для следующего UI.
+            return sectorAt(mousePosition.x, mousePosition.y);
+        },
+        getIconAlpha: function(block) {
+            // Запрещённый блок остаётся выбираемым для предпросмотра, но рисуется тускло.
+            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30;
         },
 
         // Открытие колеса делает областью для клика весь экран.
@@ -169,7 +88,6 @@ Events.on(ClientLoadEvent, () => {
         }
     });
 
-    wheel.setSize(wheelDiameter, wheelDiameter);
     wheel.visible = false;
     wheel.touchable = Touchable.enabled; // 2) Колесо теперь участвует в проверке попадания мыши.
     Core.scene.root.addChild(wheel); //Прикрепляем объект wheel для сцены
@@ -221,9 +139,7 @@ Events.on(ClientLoadEvent, () => {
     var settingsMenu = menuModule.create({
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
-        drawSector: drawSector,
-        innerRadiusRatio: innerRadiusRatio,
-        getWheelDiameter: function() { return wheel.getWidth(); }, // Манекен берёт фактический диаметр колеса выбора.
+        wheelView: wheelView, // Тот же объект основы, включая appearance, передаём манекену по ссылке.
         closeWheel: closeWheel
     });
 
@@ -319,6 +235,7 @@ Events.on(ClientLoadEvent, () => {
 
             mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); //координаты мыши
             Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
+            wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); // При открытии берём актуальный общий размер.
             wheel.setPosition(
                 mousePosition.x - wheel.getWidth() / 2,
                 mousePosition.y - wheel.getHeight() / 2
