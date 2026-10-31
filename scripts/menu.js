@@ -35,6 +35,9 @@ exports.create = function(api) {
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
     var categoryButtons = []; // Такие же записи для вкладок категорий.
     var campaignButtons = []; // Записи {button, planet, enabled}: каждая кампания включается независимо от остальных.
+    // Однотонные фоны без рамки; создаём один раз и используем для всех кнопок кампаний.
+    var campaignCheckedBackground = Tex.whiteui.tint(Color.valueOf("606060"));
+    var campaignPressedBackground = Tex.whiteui.tint(Color.valueOf("707070"));
     var gridColumns = 1;
     var previewSize = 0; // Диаметр манекена в координатах сцены; берём из общих настроек колеса.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
@@ -220,6 +223,9 @@ exports.create = function(api) {
         // У Planet неуказанный цвет белый. Здесь показываем его серым; цвета кампаний берём из игры.
         // Конструктор ImageButton копирует стиль, поэтому эти цвета меняют только текущую кнопку.
         var style = button.getStyle();
+        style.checked = campaignCheckedBackground; // Включённую кампанию обозначает заливка вместо жёлтой рамки.
+        style.checkedOver = campaignPressedBackground;
+        style.down = campaignPressedBackground;
         var iconColor = color.cpy();
         style.imageUpColor = iconColor;
         style.imageOverColor = iconColor;
