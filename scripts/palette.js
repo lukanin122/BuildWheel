@@ -1,4 +1,4 @@
-// ПАЛИТРА ЦВЕТОВ: ГЕКСАГОНЫ, КОПИРОВАНИЕ HEX И РЕДАКТОР HSV
+// ПАЛИТРА ЦВЕТОВ: ГЕКСАГОНЫ, КОПИРОВАНИЕ HEX, РЕДАКТОР HSV И ТОНИРОВАНИЕ
 "use strict"; // Запрещаем случайное присваивание не объявленной переменной.
 
 // ПОРЯДОК 216 ЦВЕТОВ ИЗ hex_palette.html
@@ -36,6 +36,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     var dialog = extend(BaseDialog, "Палитра цветов", { // Создаём обычное окно и дополняем действие после его полного закрытия.
         remove: function() { // Сцена удаляет окно после завершения анимации закрытия.
             hideCopiedToast(); // Убираем плашку копирования вместе с палитрой.
+            hideCustomClear(); // Закрываем также кнопку очистки отдельного образца.
             var removed = this.super$remove(); // Выполняем штатное удаление BaseDialog из сцены.
             if (removed && onClosed != null) onClosed(); // Возвращаем прокрутку редактору, когда палитра уже не может перехватить его фокус.
             return removed; // Сохраняем штатный результат удаления для кода сцены.
@@ -73,6 +74,19 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         for (var stop = 0; stop < (axisIndex == 0 ? 7 : 2); stop++) axis.colors.push(new Color()); // Для H нужны семь границ цветовых секторов; для S и V достаточно двух концов.
     }
     updateHsvGradients(-1); // Готовим все три перехода до первого показа редактора.
+    var tintInputs = [{text: "#FFFFFF", color: Color.white.cpy()}, {text: "#000000", color: Color.black.cpy()}]; // Храним текст и последний правильный цвет отдельно для базового и целевого полей.
+    var tintPercent = 0, tintOutput = {hex: "FFFFFF", color: Color.white.cpy()}; // Нулевой процент оставляет базовый цвет без изменения.
+    var tintOutputLabel = null, tintPercentLabel = null; // Надписи результата и процента появятся при построении блока тонирования.
+    var tintKnobColor = Color.black; // На исходном белом результате бегунок должен быть тёмным.
+    var tintGradient = {colors: [tintInputs[0].color, tintInputs[1].color], packed: [], alpha: -1}; // Линейному переходу RGB достаточно двух цветов, которые уже существуют в полях ввода.
+    var customRows = readInteger("custom.rows", 2, 2, 128), customSamples = []; // Число видимых рядов хранится отдельно от постоянных 128 мест.
+    var clearSampleIndex = -1, customClearButton = null, customPoint = new Vec2(); // Храним выбранное для очистки место, одну всплывающую кнопку и её координаты.
+    for (var sampleIndex = 0; sampleIndex < 128; sampleIndex++) { // Загружаем все места, включая скрытые в данный момент ряды.
+        var savedSample = ""; // Пустая строка обозначает образец без цвета.
+        try { savedSample = String(Core.settings.getString(prefix + "custom." + sampleIndex, "")); } // Читаем сохранённый #RRGGBB данного места.
+        catch (error) { } // Неверный тип старой настройки оставляет образец пустым.
+        customSamples.push(validHex(savedSample) ? {hex: savedSample.substring(1).toUpperCase(), color: Color.valueOf(savedSample)} : {hex: null, color: null}); // Принимаем только полный HEX, остальные значения не превращаем в цвета.
+    }
 
     // ПРОВЕРКА И ЗАГРУЗКА ЧИСЛОВЫХ НАСТРОЕК
     function readInteger(key, fallback, min, max) { // Читаем сохранённое целое; неподходящее значение заменяем исходным.
@@ -294,6 +308,9 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         return copiedButton; // Передаём кнопку правой колонке настроек.
     }
 
+    //=======================================================================================================
+    //HSV-РЕДАКТОР С ПОЛНЫМ HEX И РЕЗУЛЬТАТОМ
+    //=======================================================================================================
     // ВВОД HEX И РАСЧЁТ РЕЗУЛЬТАТА HSV
     function validHex(text) { // Разрешаем только полный код #RRGGBB, не применяя частично набранную строку.
         text = String(text); // Приводим текст Java к строке JavaScript.
@@ -302,6 +319,11 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             if ("0123456789abcdef".indexOf(text.charAt(i).toLowerCase()) < 0) return false; // Допускаем цифры и буквы HEX любого регистра.
         }
         return true; // Полный цвет можно разбирать и применять.
+    }
+
+    function colorHex(color) { // Общая запись цвета для результатов HSV и тонирования.
+        var rgb = (Math.round(color.r * 255) << 16) | (Math.round(color.g * 255) << 8) | Math.round(color.b * 255); // Округляем каждый канал до ближайшего байта RGB.
+        return (0x1000000 | rgb).toString(16).substring(1).toUpperCase(); // Получаем ровно шесть цифр с ведущими нулями, без #.
     }
 
     function updateHsvGradients(changedAxis) { // Обновляем только переходы, которые зависят от изменённого параметра.
@@ -318,8 +340,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
 
     function refreshHsvOutput(changedAxis) { // Пересчитываем RGB из текущих HSV без обратного преобразования и потери тона.
         hsvOutput.color.fromHsv(hsvValues[0], hsvValues[1], hsvValues[2]); // Получаем итоговый цвет после движения слайдера или сброса.
-        var rgb = (Math.round(hsvOutput.color.r * 255) << 16) | (Math.round(hsvOutput.color.g * 255) << 8) | Math.round(hsvOutput.color.b * 255); // Округляем каналы RGB, избегая потери единицы из-за точности float.
-        hsvOutput.hex = (0x1000000 | rgb).toString(16).substring(1).toUpperCase(); // Формируем ровно шесть цифр результата с ведущими нулями.
+        hsvOutput.hex = colorHex(hsvOutput.color); // Записываем результат в HEX с округлением каналов и сохранением ведущих нулей.
         Color.valueOf(hsvOutput.color, hsvOutput.hex); // Приводим образец к точному цвету отображаемого HEX.
         hsvKnobColor = contrastColor(hsvOutput.color); // На светлом участке бегунок становится чёрным, на тёмном — белым.
         hsvOutputLabel.setText("#" + hsvOutput.hex); // Обновляем копируемую надпись результата.
@@ -340,25 +361,25 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     }
 
     // ГРАДИЕНТЫ И ТОНКИЕ БЕГУНКИ С НАТИВНЫМ ПЕРЕТАСКИВАНИЕМ
-    function createHsvStyle(axis) { // Создаём собственный стиль только для одного нового слайдера HSV.
+    function createGradientStyle(gradient, getKnobColor) { // Одно оформление цветной полосы и бегунка обслуживает HSV и тонирование.
         var style = new Slider.SliderStyle(); // Обычные слайдеры остальных настроек сохраняют свои прежние стили.
         style.background = extend(BaseDrawable, { // Рисуем переход цветными четырёхугольниками без создания текстур.
             draw: function(x, y, width, height) { // Нативный Slider передаёт сюда всю область своей строки.
                 var alpha = Draw.getColorAlpha(); // Получаем прозрачность слайдера с учётом окна.
-                if (axis.alpha != alpha) { // Пересчитываем packed-представление только при изменении цвета или прозрачности.
-                    for (var i = 0; i < axis.colors.length; i++) { // Подготавливаем границы уже рассчитанного перехода.
-                        var color = axis.colors[i]; // Берём готовый RGB без новых преобразований HSV в кадре.
-                        axis.packed[i] = Color.toFloatBits(color.r, color.g, color.b, alpha); // Включаем прозрачность прямо в цвет вершины градиента.
+                if (gradient.alpha != alpha) { // Пересчитываем packed-представление только при изменении цвета или прозрачности.
+                    for (var i = 0; i < gradient.colors.length; i++) { // Подготавливаем границы уже рассчитанного перехода.
+                        var color = gradient.colors[i]; // Берём готовый RGB без пересчёта смешивания или HSV в кадре.
+                        gradient.packed[i] = Color.toFloatBits(color.r, color.g, color.b, alpha); // Включаем прозрачность прямо в цвет вершины градиента.
                     }
-                    axis.alpha = alpha; // Запоминаем прозрачность подготовленного кэша.
+                    gradient.alpha = alpha; // Запоминаем прозрачность подготовленного кэша.
                 }
                 var left = x + Scl.scl(10), span = width - Scl.scl(20), barHeight = Math.min(height, Scl.scl(32)); // Совмещаем края перехода с центрами крайних положений обычного бегунка шириной 20.
-                var bottom = y + (height - barHeight) / 2, segments = axis.colors.length - 1; // Центрируем полосу высотой 32 и определяем число её отрезков.
+                var bottom = y + (height - barHeight) / 2, segments = gradient.colors.length - 1; // Центрируем полосу высотой 32 и определяем число её отрезков.
                 Draw.mixcol(); // Не примешиваем к градиенту цвет предыдущего рисования.
-                for (var part = 0; part < segments; part++) { // Шесть отрезков H или один линейный отрезок S/V.
+                for (var part = 0; part < segments; part++) { // Шесть отрезков для H; один — для S, V или тонирования.
                     var x0 = left + span * part / segments, x1 = left + span * (part + 1) / segments; // Получаем горизонтальные границы очередного отрезка.
-                    Fill.quad(x0, bottom, axis.packed[part], x0, bottom + barHeight, axis.packed[part], // Задаём одинаковый цвет обеим вершинам левого края.
-                        x1, bottom + barHeight, axis.packed[part + 1], x1, bottom, axis.packed[part + 1]); // Между левым и правым цветами видеокарта рисует плавный переход.
+                    Fill.quad(x0, bottom, gradient.packed[part], x0, bottom + barHeight, gradient.packed[part], // Задаём одинаковый цвет обеим вершинам левого края.
+                        x1, bottom + barHeight, gradient.packed[part + 1], x1, bottom, gradient.packed[part + 1]); // Между левым и правым цветами видеокарта рисует плавный переход.
                 }
             }
         });
@@ -366,7 +387,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         style.knob = extend(BaseDrawable, { // Метрики обычного бегунка сохраняем, но рисуем внутри него тонкую полоску.
             draw: function(x, y, width, height) { // Получаем полную область бегунка шириной 20 UI-единиц.
                 var previous = Draw.getColorPacked(); // Запоминаем цвет рисования остальных элементов интерфейса.
-                Draw.color(hsvKnobColor, Draw.getColorAlpha() * 0.5); // Контрастный полупрозрачный цвет оставляет видимым переход под бегунком.
+                Draw.color(getKnobColor(), Draw.getColorAlpha() * 0.5); // Берём контрастный цвет текущего редактора и оставляем видимым переход под бегунком.
                 Fill.rect(x + width / 2, y + height / 2, Scl.scl(3), height); // Рисуем полоску шириной 3 по центру нативной области бегунка.
                 Draw.color(previous); // Возвращаем прежний цвет рисования.
             }
@@ -380,7 +401,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     function createHsvRow(index) { // Общий шаблон строки H, S или V с одинаковой длиной слайдера.
         var axis = hsvAxes[index], row = new Table(); // Берём параметры оси и создаём отдельную строку.
         row.add(axis.label).width(18).tooltip(axis.title); // Показываем букву и её русское значение при наведении.
-        axis.slider = new Slider(0, axis.max, axis.step, false, createHsvStyle(axis)); // Сохраняем нативные hit-test и перетаскивание, меняя только рисунок слайдера.
+        axis.slider = new Slider(0, axis.max, axis.step, false, createGradientStyle(axis, () => hsvKnobColor)); // Сохраняем нативное перетаскивание, используя общее оформление цветных слайдеров.
         axis.slider.name = "buildwheel-hsv-" + axis.key; // Постоянное имя нужного параметра для поиска в сцене.
         axis.slider.setRound(false); // Совмещаем рисунок и мышь без дополнительного округления дробных координат UI.
         axis.slider.setValue(hsvValues[index], false); // Показываем текущее значение без повторного расчёта результата.
@@ -390,7 +411,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             hsvValues[index] = Number(hsvDefaults[index]); // Точный исходный HSV хранится независимо от текущего результата.
             axis.slider.setValue(hsvValues[index], false); // Переставляем нужный бегунок, не затрагивая остальные.
             refreshHsvOutput(index); // Обновляем результат, образец и зависимые переходы.
-        }).size(32, 44).name("buildwheel-hsv-reset-" + axis.key).tooltip("Сбросить " + axis.label + " к введённому цвету").get().resizeImage(20); // Кнопки refresh одинаковы по размеру и поясняют свой сброс.
+        }).size(32, 44).name("buildwheel-hsv-reset-" + axis.key).tooltip("Сбросить " + axis.label).get().resizeImage(20); // Кнопки refresh одинаковы по размеру и поясняют свой сброс.
         return row; // Возвращаем готовую строку редактору HSV.
     }
 
@@ -409,8 +430,8 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     }
 
     function createHsvEditor(width) { // Собираем HEX и образцы в две колонки, а три слайдера располагаем ниже.
-        var editor = new Table(), columnWidth = (width - 24) / 2; // Оставляем запас под полосу прокрутки справа и зазор между колонками.
-        editor.add("Изменение цвета").colspan(2).left().padBottom(8); // Отделяем новую функцию собственным заголовком.
+        var editor = new Table(), columnWidth = (width - 24) / 2, widthCells = []; // Запоминаем ячейки одинаковой ширины, чтобы позже сдвигать их края при появлении прокрутки.
+        editor.add("Изменение цвета").colspan(2).left().padBottom(12); // Отделяем заголовок от полей немного большим промежутком.
         editor.row(); // Верхняя строка содержит исходный HEX и кнопку результата.
         hsvInput = new TextField(hsvInputText); // Восстанавливаем текст, включая незавершённый ввод после изменения окна.
         hsvInput.name = "buildwheel-hsv-input"; // Постоянное имя поля исходного цвета.
@@ -418,25 +439,210 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         hsvInput.setMessageText("#RRGGBB"); // Подсказываем формат пустого поля.
         hsvInput.setValidator(text => validHex(text)); // Неверный или частичный HEX не применяется к редактору.
         hsvInput.changed(() => acceptHsvInput(hsvInput.getText())); // Полный ввод сразу обновляет HSV и значения для сброса.
-        editor.add(hsvInput).width(columnWidth).height(44).padRight(8); // Слева помещаем поле исходного цвета.
+        widthCells.push(editor.add(hsvInput).width(columnWidth).height(44).padRight(8)); // Слева помещаем поле исходного цвета и сохраняем его ячейку.
         var output = createHexButton("buildwheel-hsv-output-button", "buildwheel-hsv-output", () => true, // Результат использует такую же серую рамку, как выбранный цвет палитры.
             (source, x, y) => copyHex(hsvOutput.hex, source, x, y)); // Копирование результата показывает прежнюю плашку и не меняет выбранный гексагон.
         hsvOutputLabel = output.label; // Сохраняем надпись для динамического обновления результата.
         hsvOutputLabel.setText("#" + hsvOutput.hex); hsvOutputLabel.setColor(hsvOutput.color); // Восстанавливаем текст и цвет результата после перестройки окна.
-        editor.add(output.button).width(columnWidth).height(44); // Справа ставим кнопку той же ширины и высоты, что поле ввода.
+        widthCells.push(editor.add(output.button).width(columnWidth).height(44)); // Справа ставим кнопку той же ширины и сохраняем её ячейку.
         editor.row(); // Под обоими HEX располагаем соответствующие образцы цвета.
-        editor.add(createColorSwatch(hsvInputColor, "buildwheel-hsv-input-swatch")).width(columnWidth).height(16).padTop(4).padRight(8); // Прямоугольник слева сохраняет исходный цвет.
-        editor.add(createColorSwatch(hsvOutput.color, "buildwheel-hsv-output-swatch")).width(columnWidth).height(16).padTop(4); // Прямоугольник справа показывает текущий результат.
+        widthCells.push(editor.add(createColorSwatch(hsvInputColor, "buildwheel-hsv-input-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Левый образец меняет ширину вместе с полем исходного цвета.
+        widthCells.push(editor.add(createColorSwatch(hsvOutput.color, "buildwheel-hsv-output-swatch")).width(columnWidth).height(16).padTop(4)); // Правый образец меняет ширину вместе с кнопкой результата.
         for (var i = 0; i < hsvAxes.length; i++) { // Добавляем три одинаковые по ширине строки H, S и V.
             editor.row(); // Каждая ось занимает собственный ряд под образцами.
             editor.add(createHsvRow(i)).colspan(2).growX().padTop(i == 0 ? 8 : 4); // Размещаем букву, градиентный слайдер и отдельный refresh.
         }
-        return editor; // Передаём новую функцию в прокручиваемую правую панель палитры.
+        return resizableEditor(editor, widthCells, 2, 24); // Передаём таблицу и возможность менять ширину колонок без пересоздания полей.
     }
+    //=======================================================================================================
+
+    // ТОНИРОВАНИЕ: ДОЛЯ ЦЕЛЕВОГО ЦВЕТА В БАЗОВОМ
+    function refreshTintOutput() { // Пересчитываем результат только после ввода цвета или изменения процента.
+        tintOutput.color.set(tintInputs[0].color).lerp(tintInputs[1].color, tintPercent / 100); // Смешиваем каналы RGB: 0% оставляет базовый цвет, 100% даёт целевой, 50% даёт равные доли.
+        tintOutput.hex = colorHex(tintOutput.color); // Получаем копируемый HEX с округлением каналов до целых байтов.
+        Color.valueOf(tintOutput.color, tintOutput.hex); // Цвет образца точно соответствует отображаемому коду.
+        tintKnobColor = contrastColor(tintOutput.color); // Бегунок остаётся заметным на светлом и тёмном участке полосы.
+        tintOutputLabel.setText("#" + tintOutput.hex); // Обновляем надпись центральной кнопки.
+        tintOutputLabel.setColor(tintOutput.color); // Красим надпись в цвет результата, как у вывода HSV.
+        tintPercentLabel.setText((Math.round(tintPercent * 10) / 10) + "%"); // Показываем долю целевого цвета с точностью до одной десятой процента.
+    }
+
+    function createTintField(index) { // Общий шаблон поля базового или целевого цвета.
+        var input = tintInputs[index], field = new TextField(input.text); // Восстанавливаем введённую строку, включая незавершённый HEX после изменения окна.
+        field.name = index == 0 ? "buildwheel-tint-base" : "buildwheel-tint-target"; // Различаем два независимых источника цвета.
+        field.setMaxLength(7); // Полный #RRGGBB занимает семь символов.
+        field.setMessageText("#RRGGBB"); // Напоминаем формат, если пользователь очистил поле.
+        field.setValidator(text => validHex(text)); // Неполная строка не становится новым цветом перехода.
+        field.changed(() => { // Реагируем на ввод в конкретное поле.
+            input.text = String(field.getText()); // Сохраняем текущий текст, даже если он ещё не завершён.
+            if (!validHex(input.text)) return; // До завершения правильного HEX сохраняем прежние образцы и результат.
+            Color.valueOf(input.color, input.text); // Меняем существующий Color, который использует образец и конец градиента.
+            tintGradient.alpha = -1; // Обновляем кэш полосы один раз после изменения одного из её концов.
+            refreshTintOutput(); // Пересчитываем результат при прежнем проценте смешивания.
+        });
+        return field; // Передаём поле соответствующей колонке тонирования.
+    }
+
+    function createTintEditor(width) { // Располагаем базовый цвет, результат и целевой цвет в одном ряду, а слайдер — ниже.
+        var editor = new Table(), columnWidth = (width - 32) / 3, widthCells = []; // Сохраняем ячейки трёх колонок для подгонки под реальную ширину прокрутки.
+        widthCells.push(editor.add("Тонирование").width(columnWidth).left().padRight(8).padBottom(12)); // Заголовок занимает первую колонку над базовым цветом.
+        var percentCell = editor.add((Math.round(tintPercent * 10) / 10) + "%").width(columnWidth).padRight(8).padBottom(12).name("buildwheel-tint-percent"); // Процент занимает такую же ячейку, как центральная кнопка.
+        widthCells.push(percentCell); tintPercentLabel = percentCell.get(); // Сохраняем надпись и её изменяемую по ширине ячейку.
+        tintPercentLabel.setAlignment(Align.left); // Сохраняем положение начала текста при изменении числа процентов.
+        widthCells.push(editor.add().width(columnWidth)); // Пустая третья ячейка тоже сохраняет общую ширину колонок.
+        editor.row(); // Верхняя строка содержит три HEX-кода.
+        widthCells.push(editor.add(createTintField(0)).width(columnWidth).height(44).padRight(8).tooltip("Базовый цвет")); // Слева вводим цвет, который соответствует 0%.
+        var output = createHexButton("buildwheel-tint-output-button", "buildwheel-tint-output", () => true, // Центральная кнопка использует ту же рамку и отступы, что результат HSV.
+            (source, x, y) => copyHex(tintOutput.hex, source, x, y)); // Копируем результат с прежней плашкой, не меняя выбранный гексагон и редактор HSV.
+        tintOutputLabel = output.label; // Сохраняем ссылку на надпись результата для обновления при перетаскивании.
+        tintOutputLabel.setText("#" + tintOutput.hex); tintOutputLabel.setColor(tintOutput.color); // Восстанавливаем результат при перестройке окна.
+        widthCells.push(editor.add(output.button).width(columnWidth).height(44).padRight(8)); // Центральная кнопка результата меняет ширину вместе с полями.
+        widthCells.push(editor.add(createTintField(1)).width(columnWidth).height(44).tooltip("Целевой цвет")); // Справа вводим цвет, который соответствует 100%.
+        editor.row(); // Следом располагаем три одинаковых прямоугольника под соответствующими HEX.
+        widthCells.push(editor.add(createColorSwatch(tintInputs[0].color, "buildwheel-tint-base-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Левый образец сохраняет ширину своего поля.
+        widthCells.push(editor.add(createColorSwatch(tintOutput.color, "buildwheel-tint-output-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Центральный образец сохраняет ширину кнопки результата.
+        widthCells.push(editor.add(createColorSwatch(tintInputs[1].color, "buildwheel-tint-target-swatch")).width(columnWidth).height(16).padTop(4)); // Правый образец сохраняет ширину целевого поля.
+        editor.row(); // Полосу смешивания размещаем под всеми тремя образцами.
+        var slider = new Slider(0, 100, 0.1, false, createGradientStyle(tintGradient, () => tintKnobColor)); // Берём прежние размеры полосы, тонкий бегунок и удобное нативное перетаскивание.
+        slider.name = "buildwheel-tint-amount"; // Постоянное имя процента тонирования в сцене.
+        slider.setRound(false); // Сохраняем совпадение рисунка и координат мыши при дробном масштабе UI.
+        slider.setValue(tintPercent, false); // Восстанавливаем процент без повторного применения смешивания.
+        slider.moved(value => { tintPercent = Number(value); refreshTintOutput(); }); // Пересчитываем только результат; готовый градиент не зависит от положения бегунка.
+        editor.add(slider).colspan(3).growX().height(44).padTop(8); // Одна полоса занимает общую ширину трёх колонок без дополнительной всплывающей инструкции.
+        return resizableEditor(editor, widthCells, 3, 32); // Передаём тонирование вместе с подгонкой всех трёх колонок.
+    }
+
+    // ПОДГОНКА КОЛОНОК ПОД МЕСТО СЛЕВА ОТ ПОЛОСЫ ПРОКРУТКИ
+    function resizableEditor(table, cells, columns, reserved) { // Общая подгонка полей HSV и тонирования не меняет их текст, фокус и обработчики.
+        return {table: table, resize: function(width) { // Окно передаёт доступную ширину редактора в UI-единицах.
+            var columnWidth = (width - reserved) / columns; // Вычитаем промежутки и делим место поровну между колонками.
+            for (var i = 0; i < cells.length; i++) cells[i].width(columnWidth); // Меняем реальные размеры ячеек, а не добавляем пустоту за прежней таблицей.
+        }};
+    }
+
+    // КАСТОМНАЯ ПАЛИТРА: ПОСТОЯННЫЕ МЕСТА И ОЧИСТКА ОБРАЗЦА
+    function storeCustomSample(index, hex) { // Меняем только выбранное место, независимо от числа видимых рядов.
+        var sample = customSamples[index]; // Получаем постоянную запись одного из 128 образцов.
+        sample.hex = hex; sample.color = hex == null ? null : Color.valueOf(hex); // Пустое место не рисует заливку; заполненное хранит готовый Color.
+        Core.settings.put(prefix + "custom." + index, hex == null ? "" : "#" + hex); // Записываем полный HEX либо пустое значение при явной очистке.
+        onChanged(); // Просим основное меню сохранить изменения вместе с остальными настройками.
+    }
+
+    function hideCustomClear() { // Закрываем всплывающую кнопку, не меняя сохранённый цвет.
+        clearSampleIndex = -1; // Снимаем выбор места для очистки.
+        if (customClearButton != null) customClearButton.remove(); // Убираем единственную кнопку из сцены, сохраняя объект для следующего вызова.
+    }
+
+    function showCustomClear(index, source) { // ПКМ по заполненному образцу открывает очистку непосредственно над ним.
+        hideCustomClear(); // Не оставляем несколько кнопок очистки над разными местами.
+        if (customClearButton == null) { // Создаём всплывающую кнопку только при первом использовании.
+            customClearButton = new ImageButton(Icon.none, Styles.defaulti); // Используем запрошенную игровую иконку none и обычное оформление кнопки.
+            customClearButton.name = "buildwheel-custom-clear"; // Постоянное имя кнопки очистки.
+            customClearButton.resizeImage(20); // Иконка помещается внутри квадрата размером 32 UI-единицы.
+            customClearButton.clicked(() => { // Очищаем место только явным нажатием ЛКМ на эту кнопку.
+                if (clearSampleIndex < 0) return; // Уже закрытая кнопка ничего не удаляет.
+                storeCustomSample(clearSampleIndex, null); // Удаляем HEX и заливку выбранного образца.
+                hideCustomClear(); // После очистки убираем всплывающую кнопку.
+            });
+        }
+        clearSampleIndex = index; // Запоминаем конкретное место для последующего нажатия none.
+        customClearButton.setSize(Scl.scl(32), Scl.scl(32)); // Кнопка очистки имеет тот же квадратный размер, что образец.
+        customPoint.set((source.getWidth() - customClearButton.getWidth()) / 2, source.getHeight() + Scl.scl(4)); // Центрируем кнопку над образцом с небольшим промежутком.
+        source.localToAscendantCoordinates(dialog, customPoint); // Учитываем положение и обе прокрутки правой панели.
+        customClearButton.setPosition(Math.max(0, Math.min(customPoint.x, dialog.getWidth() - customClearButton.getWidth())), // Не выпускаем кнопку за боковые края окна.
+            Math.max(0, Math.min(customPoint.y, dialog.getHeight() - customClearButton.getHeight()))); // Сохраняем кнопку на экране и у верхнего края.
+        dialog.addChild(customClearButton); // Показываем кнопку поверх настроек, не сдвигая саму палитру.
+    }
+
+    function createCustomSample(index) { // Создаём квадратное представление постоянного места, а не копию его данных.
+        var sample = customSamples[index]; // Ссылка остаётся действующей при заполнении и очистке.
+        var button = extend(Button, new Button.ButtonStyle(), { // Пустой стиль позволяет рисовать бесцветный образец без стандартной заливки.
+            draw: function() { // Рисуем сохранённый цвет и тонкую серую рамку.
+                this.super$draw(); // Сохраняем обычное поведение кнопки сцены.
+                var previous = Draw.getColorPacked(), stroke = Lines.getStroke(), alpha = this.color.a; // Запоминаем параметры рисования и собственную прозрачность.
+                for (var parent = this.parent; parent != null; parent = parent.parent) alpha *= parent.color.a; // Образцы исчезают вместе с окном палитры.
+                if (sample.color != null) { // Пустое место оставляем прозрачным.
+                    Draw.color(sample.color, alpha); // Берём цвет, сохранённый в этом конкретном месте.
+                    Fill.rect(this.x + this.getWidth() / 2, this.y + this.getHeight() / 2, this.getWidth(), this.getHeight()); // Закрашиваем квадрат целиком.
+                }
+                var inset = Scl.scl(0.5); // Располагаем тонкую рамку внутри квадрата.
+                Draw.color(Color.gray, alpha); Lines.stroke(Scl.scl(1)); // Серая рамка одинакова у пустого и заполненного образца.
+                Lines.rect(this.x + inset, this.y + inset, this.getWidth() - inset * 2, this.getHeight() - inset * 2); // Обводим образец без скругления углов.
+                Lines.stroke(stroke); Draw.color(previous); // Не оставляем свои параметры рисования другим элементам.
+            }
+        });
+        button.name = "buildwheel-custom-sample-" + index; // Номер всегда обозначает одно и то же постоянное место 0–127.
+        button.addListener(extend(ClickListener, KeyCode.mouseLeft, { // ЛКМ заполняет пустое место или копирует уже сохранённый цвет.
+            clicked: function(event, x, y) { // Получаем точку нажатия для прежней плашки копирования.
+                hideCustomClear(); // Обычное нажатие закрывает ранее открытое меню очистки.
+                if (sample.hex != null) { copyHex(sample.hex, button, x, y); return; } // Заполненный образец копирует свой HEX и показывает только «Скопировано».
+                var text = Core.app.getClipboardText(); // Пустой образец читает системный буфер обмена.
+                if (text == null || !validHex(text)) return; // Строго требуем # и шесть цифр, без пробелов, сокращений или alpha.
+                storeCustomSample(index, String(text).substring(1).toUpperCase()); // Сохраняем корректный RGB; сама заливка обновится при следующем рисовании.
+            }
+        }));
+        button.addListener(extend(ClickListener, KeyCode.mouseRight, { // ПКМ не очищает образец сразу.
+            clicked: function() { if (sample.hex != null) showCustomClear(index, button); } // Кнопка none появляется только над заполненным местом.
+        }));
+        return button; // Размер и расположение задаёт сетка образцов.
+    }
+
+    function createRowIcon(plus) { // Рисуем собственные значки + и − без дополнительных файлов изображений.
+        var icon = extend(BaseDrawable, { // ImageButton задаёт цвет и прозрачность иконки, включая недоступное состояние.
+            draw: function(x, y, width, height) { // Получаем область значка внутри квадратной кнопки.
+                var stroke = Lines.getStroke(), cx = x + width / 2, cy = y + height / 2; // Сохраняем толщину линий и находим центр.
+                Lines.stroke(Math.max(1, width / 10)); // Делаем линии хорошо различимыми при текущем масштабе UI.
+                Lines.line(cx - width * 0.3, cy, cx + width * 0.3, cy); // Горизонтальная линия нужна обоим значкам.
+                if (plus) Lines.line(cx, cy - height * 0.3, cx, cy + height * 0.3); // Вертикальная линия превращает минус в плюс.
+                Lines.stroke(stroke); // Возвращаем прежнюю толщину линий.
+            }
+        });
+        icon.setMinWidth(20); icon.setMinHeight(20); // Ненулевые размеры позволяют Image правильно масштабировать собственный значок.
+        return icon; // Возвращаем готовый drawable для кнопки + или −.
+    }
+
+    function createCustomEditor(width) { // Видимые ряды используют первые места из общего массива, не удаляя остальные.
+        var editor = new Table(), grid = new Table(), columns = Math.max(1, Math.floor((width + 4) / 36)); // Квадрат 32 UI и промежуток 4 UI определяют автоматический перенос.
+        editor.name = "buildwheel-custom-palette"; grid.name = "buildwheel-custom-grid"; // Постоянные имена блока и сетки помогают различать их в сцене.
+        grid.top().left(); // Каждый ряд начинается от левого края палитры.
+        var add = null, subtract = null; // Ссылки на кнопки нужны для обновления доступности у пределов.
+        function rebuild() { // Перестраиваем только сетку при изменении числа рядов или колонок.
+            hideCustomClear(); // Перенос образцов закрывает кнопку со старыми координатами.
+            grid.clearChildren(); // Убираем прежние кнопки; постоянные данные 128 мест остаются в customSamples.
+            var rows = Math.min(customRows, Math.max(2, Math.ceil(128 / columns))); // Показываем запрошенное число рядов, пока не достигнут предел мест.
+            var count = Math.min(128, rows * columns); // Последний ряд при необходимости содержит меньше квадратов.
+            for (var i = 0; i < count; i++) { // Порядок мест остаётся постоянным, слева направо и сверху вниз.
+                if (i > 0 && i % columns == 0) grid.row(); // Новая строка начинается автоматически после заполнения текущей.
+                grid.add(createCustomSample(i)).size(32).padRight(i % columns == columns - 1 ? 0 : 4).padBottom(Math.floor(i / columns) == rows - 1 ? 0 : 4); // Квадраты размером с ширину refresh сохраняют ровные ряды, включая неполный последний.
+            }
+            add.setDisabled(count == 128); // Больше 128 образцов добавлять нельзя.
+            subtract.setDisabled(rows <= 2); // Минимум два ряда остаются видимыми.
+        }
+        function changeRows(delta) { // Кнопки меняют видимость рядов, а не количество сохранённых цветов.
+            var maxRows = Math.max(2, Math.ceil(128 / columns)); // Предел зависит от доступного числа колонок.
+            customRows = Math.max(2, Math.min(maxRows, Math.min(customRows, maxRows) + delta)); // Добавляем или скрываем один ряд с учётом обоих ограничений.
+            Core.settings.put(prefix + "custom.rows", new java.lang.Integer(String(customRows))); // Запоминаем выбранное число видимых рядов.
+            onChanged(); // Отмечаем изменение настройки для записи на диск.
+            rebuild(); // Перестраиваем сетку, не изменяя ни одного сохранённого HEX.
+        }
+        editor.add("Кастомная палитра").growX().left(); // Название занимает начало строки, а кнопки уходят в её правый конец.
+        add = editor.button(createRowIcon(true), Styles.cleari, () => changeRows(1)).size(32).name("buildwheel-custom-add-row").get(); // Плюс добавляет один видимый ряд.
+        subtract = editor.button(createRowIcon(false), Styles.cleari, () => changeRows(-1)).size(32).name("buildwheel-custom-remove-row").get(); // Минус скрывает один ряд, сохраняя его цвета.
+        add.resizeImage(20); subtract.resizeImage(20); // Иконки + и − имеют одинаковые размеры.
+        editor.row(); // Сетка образцов начинается ниже заголовка и кнопок.
+        editor.add(grid).colspan(3).growX().padTop(12); // Оставляем между заголовком и квадратами тот же аккуратный зазор.
+        rebuild(); // Изначально показываем два ряда либо сохранённое пользователем число.
+        return {table: editor, resize: function(nextWidth) { // Окно может менять количество колонок при изменении доступной ширины.
+            var nextColumns = Math.max(1, Math.floor((nextWidth + 4) / 36)); // Рассчитываем, сколько квадратов теперь помещается в ряд.
+            if (columns == nextColumns) return; // Прежняя сетка не нуждается в пересоздании, если число колонок не изменилось.
+            columns = nextColumns; rebuild(); // Переносим те же постоянные места в новую сетку.
+        }};
+    }
+
 
     // ПОЛЯ РАЗМЕРА И ОТСТУПА
     function addNumberField(table, title, key, min, max, value) { // Создаём подпись и строку ввода с одинаковой шириной.
-        table.add(title).growX().left().padBottom(4); // Располагаем название настройки над полем.
+        table.add(title).growX().left().padBottom(2); // Оставляем между названием и полем на две UI-единицы меньше.
         table.row(); // Само поле помещаем ниже названия.
         var field = new TextField(String(value)); // Показываем текущее значение настройки.
         field.name = "buildwheel-palette-" + key; // Различаем поле размера и поле отступа по постоянному имени.
@@ -479,9 +685,11 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     // СОДЕРЖИМОЕ ОКНА: ПАЛИТРА СЛЕВА, НАСТРОЙКИ И «НАЗАД» СПРАВА
     function buildInterface() { // Перестраиваем таблицы при открытии и изменении размера окна, сохраняя геометрию палитры.
         hideCopiedToast(); // При изменении размера окна убираем плашку с уже устаревшими координатами.
+        hideCustomClear(); // Кнопка очистки не должна оставаться над прежним положением образца.
         var scale = Scl.scl(1), width = Core.scene.getWidth() / scale, height = Core.scene.getHeight() / scale; // Используем всю ширину и высоту сцены без процентного ограничения.
         dialog.setBounds(0, 0, Core.scene.getWidth(), Core.scene.getHeight()); // Закрепляем окно у начала сцены, чтобы после уменьшения экрана оно не сохраняло прежнее смещение.
-        var controlsWidth = Math.min(360, Math.max(328, width * 0.4), width - 104); //#marker# Ширина настроек: обычно 328–360 UI-единиц, чтобы в обоих полях помещался #000000; на узком экране оставляем хотя бы 104 для рисунка и зазора.
+        var controlsWidth = Math.min(520, Math.max(472, width * 0.4), width - 104); //#marker# Ширина настроек под три HEX-кода: обычно 472–520 UI-единиц; на узком экране оставляем хотя бы 104 для рисунка и зазора.
+        var settingsWidth = Math.max(448, controlsWidth - 24); // Сохраняем читаемую ширину полей даже в узкой панели, где включается горизонтальная прокрутка.
         var pictureWidth = width - controlsWidth - 16; // Всю оставшуюся ширину отдаём рисунку, оставляя зазор перед настройками.
         dialog.cont.clearChildren(); // Убираем прежние таблицы перед сборкой интерфейса.
         var body = new Table(), controls = new Table(), settings = new Table(); // Отделяем прокручиваемые настройки от закреплённых заголовка и кнопки «Назад».
@@ -492,19 +700,48 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         settings.top().left(); // Настройки начинаются у верхнего края своей прокручиваемой области.
         addNumberField(settings, "Размер гексагона", "size", 8, 80, radius); // Добавляем поле радиуса, как в исходной HTML-палитре.
         addNumberField(settings, "Отступ", "gap", 0, 30, gap); // Добавляем единый отступ между соседними гранями.
-        settings.check("Показывать HEX", showLabels, value => { // Создаём переключатель подписей с сохранённым состоянием.
+        var selectionRow = new Table(); // Объединяем выбранный HEX и переключатель подписей в один ряд.
+        selectionRow.add(createCopiedButton()).growX().height(44).padRight(12); // Слева показываем инструкцию или кнопку копирования, сохраняя место под рамку.
+        selectionRow.check("Показывать HEX", showLabels, value => { // Справа создаём переключатель подписей с сохранённым состоянием.
             showLabels = value; // Меняем только разрешение рисовать готовый кэш подписей.
             Core.settings.put(prefix + "labels", value); // Сохраняем состояние переключателя в памяти настроек игры.
             onChanged(); // Сообщаем основному меню, что настройки потребуется записать.
-        }).growX().height(44).left().name("buildwheel-palette-labels"); // Даём переключателю обычную высоту и постоянное имя.
-        settings.row(); // Под переключателем располагаем строку выбранного цвета.
-        settings.add(createCopiedButton()).growX().height(44).padTop(12); // Резервируем одинаковую высоту под инструкцию и кнопку, чтобы рамка не сдвигала текст.
+        }).height(44).left().name("buildwheel-palette-labels"); // Переключатель занимает обычную высоту и остаётся после кнопки HEX.
+        settings.add(selectionRow).growX(); // Вставляем оба элемента в одну строку правой панели.
         settings.row(); // Ниже добавляем отдельную функцию изменения цвета.
-        settings.add(createHsvEditor(controlsWidth - 24)).growX().padTop(20); // Выделяем редактору внутреннюю ширину правой колонки.
-        var settingsPane = new ScrollPane(settings, Styles.defaultPane); // Новые функции остаются доступны при малой высоте окна.
+        var hsvEditor = createHsvEditor(settingsWidth); // Сохраняем доступ к изменению внутренних размеров HSV.
+        var hsvCell = settings.add(hsvEditor.table).width(settingsWidth).padTop(32); // Отделяем редактор HSV от предыдущих настроек заметным промежутком.
+        settings.row(); // Вторую функцию размещаем под редактором HSV.
+        var tintEditor = createTintEditor(settingsWidth); // Сохраняем доступ к изменению трёх колонок тонирования.
+        var tintCell = settings.add(tintEditor.table).width(settingsWidth).padTop(32); // Оставляем такой же промежуток перед отдельным блоком тонирования.
+        settings.row(); // Последний блок настроек располагается ниже тонирования.
+        var customEditor = createCustomEditor(settingsWidth); // Создаём сетку образцов из постоянных 128 мест.
+        var customCell = settings.add(customEditor.table).width(settingsWidth).left().padTop(32); // Сохраняем промежуток между блоками и выравниваем сетку по левому краю.
+        var customWidth = settingsWidth; // В отличие от HEX-полей, квадраты могут переноситься по фактической видимой ширине панели.
+        var pictureCell = null, controlsCell = null, rightReserve = 0; // Ячейки обеих половин позволяют отдать место правой полосе, сдвигая настройки влево.
+        var settingsPane = extend(ScrollPane, settings, Styles.defaultPane, { // Подгоняем реальные размеры таблиц под область слева от правой полосы.
+            layout: function() { // Пересчёт запускается обычной системой раскладки, а не постоянной проверкой в каждом кадре.
+                this.super$layout(); // Сначала даём ScrollPane определить, какие полосы действительно нужны.
+                var reserve = this.isScrollY() ? Math.min(this.getScrollBarWidth() / Scl.scl(1) + 8, Math.max(0, pictureWidth - 88)) : 0; // Резервируем справа ширину полосы и зазор, пока у рисунка есть свободная ширина.
+                if (pictureCell != null && controlsCell != null && Math.abs(rightReserve - reserve) >= 0.01) { // Меняем разделение окна только при появлении или исчезновении полосы.
+                    rightReserve = reserve; pictureCell.width(pictureWidth - reserve); // Рисунок уступает ровно необходимое место.
+                    controlsCell.width(controlsWidth + reserve); // Левый край настроек сдвигается влево, а справа освобождается место для полосы.
+                }
+                var gap = this.isScrollY() ? 8 : 0, visible = Math.max(32, this.getScrollWidth() / Scl.scl(1) - gap); // Получаем фактическое место слева от правой полосы и зазора.
+                var available = Math.max(448, visible); // HEX-полям сохраняем читаемую ширину; в узком окне они доступны горизонтальной прокруткой.
+                if (Math.abs(settingsWidth - available) < 0.01 && Math.abs(customWidth - visible) < 0.01 && settings.getMarginRight() == Scl.scl(gap)) return; // При неизменившейся области никакие ячейки не трогаем.
+                settingsWidth = available; settings.marginRight(gap); // Меняем ширину содержимого и оставляем зазор только справа.
+                hsvEditor.resize(available); hsvCell.width(available); // Уменьшаем обе колонки HSV, сдвигая правые кнопки влево от полосы.
+                tintEditor.resize(available); tintCell.width(available); // Так же уменьшаем реальные поля и образцы тонирования.
+                customWidth = visible; customEditor.resize(visible); customCell.width(visible); // Квадраты переносятся по видимой ширине, даже когда широкие HEX-поля требуют прокрутки.
+                this.super$layout(); // Применяем новые размеры и пересчитываем пределы обеих прокруток.
+            }
+        });
         settingsPane.name = "buildwheel-palette-settings"; // Постоянное имя прокрутки настроек.
-        settingsPane.setScrollingDisabled(true, false); // Прокручиваем настройки только по вертикали.
+        settingsPane.setScrollingDisabled(false, false); // В узком окне разрешаем обе прокрутки, сохраняя три HEX-поля в одной строке и полностью читаемыми.
         settingsPane.setFadeScrollBars(false); // Оставляем нужную полосу прокрутки видимой.
+        settingsPane.setScrollbarsOnTop(false); // Сама полоса получает отдельную область; содержимое не рисуется под ней.
+        settingsPane.setScrollBarPositions(true, true); // Горизонтальная полоса находится снизу, вертикальная — именно справа.
         settingsPane.setOverscroll(false, false); // Не растягиваем настройки за границы содержимого.
         settingsPane.hovered(() => Core.scene.setScrollFocus(settingsPane)); // Над правой панелью колёсико мыши прокручивает настройки.
         controls.add(settingsPane).grow().minWidth(0).minHeight(0); // Панель настроек занимает всё место между заголовком и кнопкой возврата.
@@ -515,8 +752,8 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         imagePane.setFadeScrollBars(false); // Оставляем нужные полосы прокрутки видимыми.
         imagePane.setOverscroll(false, false); // Не растягиваем рисунок за пределы его краёв при прокрутке.
         imagePane.hovered(() => Core.scene.setScrollFocus(imagePane)); // Над рисунком колёсико снова управляет самой палитрой.
-        body.add(imagePane).size(pictureWidth, height); // Задаём область рисунка слева, не уменьшая сами гексагоны.
-        body.add(controls).width(controlsWidth).growY().padLeft(16); // Правая колонка занимает всю высоту и отделена от рисунка.
+        pictureCell = body.add(imagePane).size(pictureWidth, height); // Сохраняем ячейку рисунка для выделения места полосе справа.
+        controlsCell = body.add(controls).width(controlsWidth).growY().padLeft(16); // Правая колонка занимает всю высоту и может сдвигаться влево на ширину полосы.
         dialog.cont.add(body).grow(); // Обе части занимают всё окно, а рисунок получает полную доступную высоту.
     }
 
@@ -532,8 +769,17 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     function hide() { // Этот же способ закрытия используют «Назад» и клавиши основного меню.
         if (!dialog.isShown()) return; // Уже закрытое окно повторно не закрываем.
         hideCopiedToast(); // Плашка исчезает сразу при выходе из палитры.
+        hideCustomClear(); // Закрываем и контекстную кнопку очистки образца.
         dialog.hide(); // Начинаем закрытие палитры и штатное восстановление фокуса сцены.
     }
+
+    dialog.addCaptureListener(extend(InputListener, { // Закрываем маленькое меню очистки обычными действиями внутри окна палитры.
+        touchDown: function(event) { // Нажатие вне кнопки none закрывает её, не мешая назначению исходного нажатия.
+            if (customClearButton != null && customClearButton.hasParent() && event.targetActor != null && !event.targetActor.isDescendantOf(customClearButton)) hideCustomClear(); // Самой кнопке очистки даём обработать свой ЛКМ.
+            return false; // Не забираем щелчок у полей, слайдеров и образцов.
+        },
+        scrolled: function() { hideCustomClear(); return false; } // Прокрутка закрывает кнопку со старыми координатами и продолжает обычную работу.
+    }));
 
     dialog.addListener(extend(ResizeListener, { // Слушаем изменение размеров окна без постоянной покадровой проверки.
         resized: function() { // Сцена сообщает о новой ширине или высоте.
