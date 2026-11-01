@@ -5,6 +5,7 @@
 "use strict"; // В частности, запрещает случайное присваивание не объявленной переменной.
 var uiSounds = require("sounds"); // Общий модуль уже загружает только четыре используемых звука.
 var appearanceMenuModule = require("appearance-menu"); // Подключаем модуль полей внешнего вида «колеса выбора» и «манекена».
+var paletteModule = require("palette"); // Подключаем отдельное окно палитры, которое копирует выбранный цвет в буфер обмена.
 
 // ------------------------------------------------------------
 // СОЗДАНИЕ РЕДАКТОРА И ЕГО СОСТОЯНИЕ
@@ -45,6 +46,9 @@ exports.create = function(api) {
     var previewCell, scaleSliderCell, sectorLabelCell, rightPanelCell; // Ячейки таблиц, размеры которых меняются вместе с диаметром «манекена».
     var baseRightWidth = 0; // Минимальная ширина правой панели, необходимая для её надписей и полей настроек.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
+    var palette = paletteModule.create(() => { settingsChanged = true; }, () => { // Создаём палитру с уведомлениями об изменении настройки и закрытии окна.
+        if (dialog.isShown()) Core.scene.setScrollFocus(blockPane); // При возврате из палитры передаём колёсико мыши актуальному списку блоков.
+    });
 
     // СВЯЗЬ НАСТРОЕК ВИДА С МЕНЮ
     var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
@@ -363,7 +367,7 @@ exports.create = function(api) {
     // Указывает сцене, какой ScrollPane должен получать вращение колёсика.
     // Проверка isShown не даёт отложенной задаче забрать фокус после закрытия меню.
     function focusBlockList() {
-        if (dialog.isShown()) Core.scene.setScrollFocus(blockPane);
+        if (dialog.isShown() && !palette.isShown()) Core.scene.setScrollFocus(blockPane); // Открытая палитра сохраняет прокрутку за своим рисунком.
     }
 
     // ------------------------------------------------------------
@@ -469,7 +473,11 @@ exports.create = function(api) {
             wheelLabel.setText("Колесо " + editedWheel);
             refreshSectorControls(); //обновляем видимые настройки сектора
         });
-        right.add(wheelSlider).growX().height(32).padTop(8).padBottom(8); // Отступ сверху не даёт высокому стандартному бегунку перекрывать подпись колеса.
+        var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
+        wheelNumberRow.add(wheelSlider).growX().height(32); // Слайдер занимает всю ширину строки до кнопки справа.
+        wheelNumberRow.button("Палитра", Core.atlas.drawable("buildwheel-icon_color"), 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
+            .width(144).height(44).name("buildwheel-open-palette").tooltip("Палитра"); // Закрепляем кнопку у правого края и добавляем подсказку.
+        right.add(wheelNumberRow).growX().padTop(8).padBottom(8); // Отступ сверху сохраняет место под высокий стандартный бегунок слайдера.
         right.row();
 
         // ПРАВАЯ ЧАСТЬ: ТЕКСТОВАЯ СТРОКА ИМЕНИ БЛОКА СЕКТОРА
@@ -511,6 +519,7 @@ exports.create = function(api) {
     // ОТКРЫТИЕ, ЗАКРЫТИЕ И ПЕРЕСТРОЙКА ПО РАЗМЕРУ ОКНА
     // ------------------------------------------------------------
     function hide() { //Закрыть меню настроек
+        palette.hide(); // При закрытии всего редактора палитра тоже должна исчезнуть.
         if (dialog.isShown()) dialog.hide();
     }
 
@@ -532,6 +541,7 @@ exports.create = function(api) {
     // При начале закрытия снимаем выделение и сохраняем изменённые настройки.
     // Сама анимация исчезновения диалога при этом ещё может продолжаться.
     dialog.hidden(() => {
+        palette.hide(); // Закрываем дочернее окно также при внешнем вызове dialog.hide().
         editedSector = -1;
         flushSettings();
     });
@@ -571,7 +581,7 @@ exports.create = function(api) {
         if (dialog.isShown()) {
             if (isCloseKey(key)) {
                 closeKeysCaptured[key.ordinal()] = true; // Запоминаем перехваченную клавишу, чтобы позже поглотить её отпускание.
-                Core.app.post(hide); // Передаём функцию без скобок: закрытие выполнится через очередь приложения.
+                Core.app.post(palette.isShown() ? palette.hide : hide); // Сначала закрываем палитру; следующее нажатие закроет основное меню настроек.
                 return true;
             }
             return false;

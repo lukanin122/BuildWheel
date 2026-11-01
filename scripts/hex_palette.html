@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Hex Palette Generator</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+  canvas { background: #000; border: 1px solid #444; }
+  .controls { margin: 15px 0; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  label { display: flex; align-items: center; gap: 6px; }
+  button { padding: 8px 16px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <label>Размер гексагона (radius): <input type="number" id="sizeInput" value="28" min="8" max="80" step="1"></label>
+  <label>Отступ (gap): <input type="number" id="gapInput" value="2" min="0" max="30" step="1"></label>
+  <label><input type="checkbox" id="showText"> Показывать hex-код</label>
+  <label><input type="checkbox" id="savePng"> Сохранить PNG при генерации</label>
+  <button onclick="generate()">Сгенерировать</button>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+// ===================== НАСТРОЙКИ =====================
+let HEX_SIZE = 28;          // радиус гексагона (расстояние от центра до вершины)
+let GAP = 2;                // одинаковый отступ между гексагонами
+let SHOW_TEXT = false;      // писать hex-код внутри
+let SAVE_PNG = false;       // автоматически скачать PNG
+
+// ===================== ЦВЕТА (216 штук) =====================
+const COLORS = [
+"99FF00","CCFF00","CCFF33","99CC00","CC9900","FFCC33","FFCC00","FF9900","FF6600",
+"66FF00","99FF33","CCFF66","99CC33","669900","996600","CC9933","FFCC66","FF9933","FF3300",
+"33FF00","99FF66","66CC00","333300","666600","999900","CCCC00","FFFF00","CC6600","FF9966","FF6633",
+"66FF33","66CC33","00FF00","336600","666633","999933","CCCC33","FFFF33","663300","330000",
+"CC6633","CC3300","33CC00","339900","00CC00","33FF33","669933","999966","CCCC66","FFFF66",
+"996633","663333","660000","993300","CC0033","00CC33","009933","009900","33CC33","66FF66",
+"99CC66","CCCC99","FFFF99","CC9966","996666","993333","990000","990033","FF3366","33FF66",
+"33CC66","006600","339933","66CC66","99FF99","CCFF99","FFFFCC","FFCC99","CC9999","CC6666",
+"CC3333","CC0000","CC3366","FF0033","00FF33","66FF99","003300","336633","669966","99CC99",
+"CCFFCC","999999","CCCCCC","FFCCCC","FF9999","FF6666","FF3333","FF0000","FF6699","FF0066",
+"00FF66","33FF99","00CC66","006633","339966","66CC99","99FFCC","666666","FFFFFF","FF99CC",
+"CC6699","993366","660033","CC0066","FF3399","FF0099","00FF99","66FFCC","00FFFF","33FFFF",
+"66FFFF","99FFFF","CCFFFF","333333","000000","FFCCFF","CC99CC","996699","663366","330033",
+"FF66CC","FF00CC","00FFCC","33CC99","00CCCC","33CCCC","66CCCC","99CCCC","99CCFF","CCCCFF",
+"CC99FF","FF99FF","CC66CC","993399","660066","CC3399","FF33CC","33FFCC","009966","009999",
+"339999","669999","6699CC","9999FF","9999CC","9966CC","FF66FF","CC33CC","990099","990066",
+"CC0099","00CC99","006699","006666","336666","336699","6666FF","6666CC","666699","663399",
+"FF33FF","CC00CC","660099","9900CC","0099CC","3399CC","003333","003366","3333FF","3333CC",
+"333399","333366","330066","FF00FF","9933CC","CC33FF","33CCFF","66CCFF","0066CC","0000FF",
+"0000CC","000099","000066","000033","6600CC","CC66FF","CC00FF","00CCFF","3399FF","6699FF",
+"3366CC","003399","330099","6633CC","9966FF","9933FF","9900FF","0099FF","0066FF","0033FF",
+"3366FF","0033CC","3300CC","6633FF","3300FF","6600FF"
+];
+
+// ===================== ОТРИСОВКА =====================
+function generate() {
+  HEX_SIZE = +document.getElementById("sizeInput").value;
+  GAP = +document.getElementById("gapInput").value;
+  SHOW_TEXT = document.getElementById("showText").checked;
+  SAVE_PNG = document.getElementById("savePng").checked;
+
+  const R = 8; // радиус большого гексагона
+  // Для flat-top ориентации
+  const horiz = HEX_SIZE * 1.5 + GAP;
+  const vert  = HEX_SIZE * Math.sqrt(3) + GAP;
+
+  // Считаем габариты
+  const maxCols = 2 * R + 1; // 17
+  const width  = Math.ceil(maxCols * horiz + HEX_SIZE * 2);
+  const height = Math.ceil((2 * R) * vert + HEX_SIZE * 2);
+
+  const canvas = document.getElementById("c");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  // Прозрачный фон
+  ctx.clearRect(0, 0, width, height);
+
+  // Центр холста
+  const cx = width / 2;
+  const cy = height / 2;
+
+  let colorIdx = 0;
+
+  // Рисуем ряды от -R до +R
+  for (let r = -R; r <= R; r++) {
+    const numInRow = 2 * R + 1 - Math.abs(r); // 9 … 17 … 9
+    // Смещение ряда для формы большого гексагона + stagger
+    const rowOffsetX = r * (horiz * 0.5); // ключевое смещение
+
+    for (let i = 0; i < numInRow; i++) {
+      // Пропускаем самый центр (пустой гексагон между 108 и 109)
+      if (r === 0 && i === Math.floor(numInRow / 2)) {
+        continue; // не берём цвет, не рисуем
+      }
+
+      if (colorIdx >= COLORS.length) break;
+
+      // Cмещение вверх на пол-гексагона
+      const itemOffsetY = i * (vert / 2);
+	  
+      const hex = COLORS[colorIdx++];
+      const x = cx + rowOffsetX + (i - (numInRow - 1) / 2) * horiz;
+      const y = cy + r * vert - ((x - cx) / horiz) * (vert / 2);
+
+      drawHex(ctx, x, y, HEX_SIZE, "#" + hex);
+
+      if (SHOW_TEXT) {
+        drawHexText(ctx, x, y, HEX_SIZE * 1.55, hex);
+      }
+    }
+  }
+
+  if (SAVE_PNG) {
+    // Скачиваем PNG
+    const link = document.createElement("a");
+    link.download = "hex_palette.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }
+}
+
+// Рисует один flat-top гексагон
+function drawHex(ctx, x, y, size, color) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 180 * (60 * i);
+    const px = x + size * Math.cos(angle);
+    const py = y + size * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// Текст с контрастным цветом
+function drawHexText(ctx, x, y, size, hex) {
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  // Яркость
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  ctx.fillStyle = lum > 0.55 ? "#000000" : "#FFFFFF";
+
+  // Размер шрифта, чтобы текст не упирался в края
+  const fontSize = Math.max(8, Math.floor(size * 0.32));
+  ctx.font = `bold ${fontSize}px monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(hex, x, y);
+}
+
+// Первая генерация
+generate();
+</script>
+</body>
+</html>
