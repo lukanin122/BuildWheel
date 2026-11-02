@@ -2,8 +2,12 @@
 "use strict"; // Запрещаем присваивания переменным, которые не были объявлены.
 
 exports.create = function(wheelView, onChanged) { // Создаём редактор; onChanged сообщает меню о применённой настройке.
-    var appearance = wheelView.appearance; // Получаем ссылку на общие параметры «колеса выбора» и «манекена».
-    var settingsPrefix = "buildwheel.appearance."; // Начало имён сохранённых настроек внешнего вида.
+    var editedWheel = 1; // Номер комплекта, который сейчас редактирует форма.
+    var appearance = wheelView.getVisual(editedWheel).appearance; // «Колесо выбора» и «манекен» этого номера используют те же объекты параметров и цветов.
+    var settingsPrefix = "buildwheel.visual."; // У каждого номера собственные ключи вида buildwheel.visual.1.appearance.diameter.
+    var legacyPrefix = "buildwheel.appearance."; // Старые общие параметры служат исходным видом для ещё не перенесённых номеров.
+    var synchronizeGroups = []; // Функции переключения уже созданных полей; при смене номера форму не пересоздаём.
+    var needsSave = false; // Сообщаем меню, что впервые созданные индивидуальные настройки нужно записать на диск.
 
     // СОСТАВ ГРУПП НАСТРОЕК
     var groups = [ // id — имя группы в коде; title — заголовок; metric — размер; color и alpha — имена параметров appearance.
@@ -64,32 +68,56 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         return true; // Все символы корректны: цвет можно применить к «колесу выбора» и «манекену».
     }
 
-    // ЗАГРУЗКА СОХРАНЁННОГО ВНЕШНЕГО ВИДА
-    for (var i = 0; i < fields.length; i++) { // Читаем настройки до создания «манекена».
-        var field = fields[i]; // Берём описание очередного параметра.
-        try { // Обрабатываем неверный тип сохранённого значения без срыва открытия меню.
-            if (field.type == "color") { // Цвета хранятся как строки HEX.
-                var savedColor = String(Core.settings.getString(settingsPrefix + field.key, colorText(appearance[field.key]))); // Читаем цвет; при отсутствии настройки используем исходный.
-                if (validColor(savedColor)) appearance[field.key].set(Color.valueOf(savedColor)); // Разбираем корректный HEX и меняем существующий объект Color.
-            } else {
-                var savedNumber = Number(Core.settings.getFloat(settingsPrefix + field.key, appearance[field.key])); // Читаем Java Float и получаем число JavaScript.
-                if (validNumber(field, savedNumber)) appearance[field.key] = savedNumber; // Применяем сохранённое число, если оно допустимо.
+    // ОДНОКРАТНАЯ ЗАГРУЗКА И ПЕРЕНОС ПРЕЖНЕГО ОБЩЕГО ВИДА
+    for (var number = 0; number < wheelView.wheelCount; number++) { // Все десять небольших комплектов читаются только при создании редактора, а не при открытии колёс.
+        var visual = wheelView.getVisual(number), savedAppearance = visual.appearance; // Заполняем существующие объекты: ссылки рисования на них сохраняются.
+        for (var i = 0; i < fields.length; i++) { // Восстанавливаем параметры шести групп, доступных пользователю справа от списка блоков.
+            var field = fields[i], key = fieldKey(number, field); // Получаем отдельный ключ параметра этого номера.
+            var hasIndividual = Core.settings.has(key); // Индивидуальный параметр всегда имеет приоритет перед старым общим.
+            var sourceKey = hasIndividual ? key : legacyPrefix + field.key; // При первом переходе переносим прежний визуал на каждый номер.
+            try { // Повреждённое значение не должно мешать загрузке остальных настроек.
+                if (field.type == "color") { // Цвета сохраняются строками #RRGGBB.
+                    var savedColor = String(Core.settings.getString(sourceKey, colorText(savedAppearance[field.key]))); // При отсутствии старого значения оставляем заводской цвет.
+                    if (validColor(savedColor)) savedAppearance[field.key].set(Color.valueOf(savedColor)); // Меняем собственный Color этого номера, не затрагивая другие комплекты.
+                } else {
+                    var savedNumber = Number(Core.settings.getFloat(sourceKey, savedAppearance[field.key])); // Читаем число с заводским значением по умолчанию.
+                    if (validNumber(field, savedNumber)) savedAppearance[field.key] = savedNumber; // Применяем только число в прежних допустимых пределах.
+                }
+            } catch (error) { // Ошибка типа сохранённого значения оставляет заводской параметр в этом комплекте.
             }
-        } catch (error) { // При ошибке чтения сохраняем исходное значение appearance.
+            if (!hasIndividual) { // Материализуем перенос один раз; дальнейшие изменения старых общих ключей на этот номер уже не влияют.
+                saveField(field, number); // Сохраняем полученное значение в памяти Core.settings по новому адресу.
+                needsSave = true; // Закрытие меню или приложения запишет перенесённые значения вместе с другими настройками.
+            }
+        }
+        var countKey = settingsPrefix + number + ".sectorCount"; // Количество секторов хранится рядом с appearance того же комплекта.
+        try { // Проверяем число заранее, чтобы повреждённые настройки не создавали чрезмерно длинные циклы рисования.
+            var count = Number(Core.settings.getInt(countKey, wheelView.defaultSectorCount)); // Читаем сохранённый Java Integer; дробный тип будет отклонён без округления.
+            if (isFinite(count) && count >= 1 && count <= 128 && count == Math.floor(count)) visual.sectorCount = count; // Принимаем целое число 1–128; отдельного поля изменения числа секторов в интерфейсе пока нет.
+        } catch (error) { // При неверном типе сохраняем исходные восемь секторов.
+        }
+        if (!Core.settings.has(countKey)) { // Впервые записываем число секторов даже у колеса без пользовательских правок.
+            Core.settings.put(countKey, new java.lang.Integer(String(visual.sectorCount))); // Java Integer сохраняется штатным Settings как целое число.
+            needsSave = true; // Отмечаем необходимость записи нового комплекта на диск.
         }
     }
 
     // СОХРАНЕНИЕ И ПРИМЕНЕНИЕ ПАРАМЕТРА
-    function saveField(field) { // Меняем настройку в памяти Core.settings; запись на диск выполняет меню при закрытии.
-        var value = appearance[field.key]; // Получаем текущее значение параметра общего внешнего вида.
-        var key = settingsPrefix + field.key; // Собираем постоянное имя настройки, например buildwheel.appearance.diameter.
+    function fieldKey(number, field) { // Собираем адрес одного параметра внутри комплекта указанного номера.
+        return settingsPrefix + number + ".appearance." + field.key; // Ключи разных номеров не пересекаются; старые общие ключи остаются нетронутыми.
+    }
+
+    function saveField(field, number) { // Меняем настройку в памяти Core.settings; запись на диск выполняет меню при закрытии.
+        if (number == null) number = editedWheel; // Обычный ввод сохраняет редактируемое колесо; перенос передаёт номер явно.
+        var value = wheelView.getVisual(number).appearance[field.key]; // Читаем параметр именно сохраняемого комплекта.
+        var key = fieldKey(number, field); // Используем индивидуальный адрес параметра этого колеса.
         if (field.type == "color") Core.settings.put(key, colorText(value)); // Сохраняем цвет строкой #RRGGBB.
         else Core.settings.put(key, new java.lang.Float(String(value))); // Сохраняем число как Java Float (Settings не записывает Double от обычного числа JS).
     }
 
     function applyNumber(field, value) { // Применяем число, введённое в поле или выбранное слайдером.
         if (!validNumber(field, value) || appearance[field.key] == value) return; // Игнорируем недопустимый ввод и неизменившееся значение.
-        appearance[field.key] = value; // Обновляем общий параметр «колеса выбора» и «манекена».
+        appearance[field.key] = value; // Обновляем параметр «колеса выбора» и «манекена» только редактируемого номера.
         saveField(field); // Передаём значение в Core.settings.
         onChanged(field.key == "diameter"); // Сообщаем меню об изменении (true дополнительно требует пересчёта размеров).
     }
@@ -106,12 +134,13 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
     }
 
     // ОКРАСКА ПОДЧЁРКИВАНИЙ И СЛАЙДЕРОВ ГРУППЫ
-    function coloredUnderline(drawable, color) { // Оборачиваем штатное подчёркивание, сохраняя его рисунок, размеры и отступы.
+    function coloredUnderline(drawable, visuals) { // Оборачиваем штатное подчёркивание, сохраняя его рисунок, размеры и отступы.
         if (drawable == null) return null; // Не создаём фон для состояния, у которого его изначально нет.
         return extend(BaseDrawable, drawable, { // Конструктор BaseDrawable копирует размеры исходного Drawable для правильного размещения текста.
             draw: function(x, y, width, height) { // Игра вызывает отрисовку подчёркивания в обычных границах поля.
                 var previous = Draw.getColor(); // Читаем цвет, с которым TextField собирался рисовать свой фон.
                 var r = previous.r, g = previous.g, b = previous.b, a = previous.a; // Сохраняем компоненты отдельно: Draw.color изменяет тот же объект Color.
+                var color = visuals.color; // Ссылка обновляется при смене номера; сам Drawable и его стиль остаются прежними.
                 Draw.color(r * color.r, g * color.g, b * color.b, a); // Окрашиваем подчёркивание цветом группы, сохраняя прозрачность интерфейса.
                 try { // Возвращаем цвет рисования даже при ошибке внутри штатного Drawable.
                     drawable.draw(x, y, width, height); // Рисуем прежнее подчёркивание; новые текстуры не создаются.
@@ -187,8 +216,8 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         if (control instanceof TextField) { // Числовые поля и HEX получают окрашенное подчёркивание; текст сохраняет штатный цвет.
             var style = new TextField.TextFieldStyle(control.getStyle()); // Копируем стиль только этого поля, не меняя оформление остальных полей игры.
             style.invalidBackground = control.getStyle().invalidBackground; // Сохраняем обозначение ошибки отдельно: конструктор копии TextFieldStyle его не переносит.
-            style.background = coloredUnderline(style.background, visuals.color); // Окрашиваем подчёркивание в обычном состоянии.
-            style.focusedBackground = coloredUnderline(style.focusedBackground, visuals.color); // Окрашиваем подчёркивание при вводе, если у стиля предусмотрен отдельный фон фокуса.
+            style.background = coloredUnderline(style.background, visuals); // Окрашиваем подчёркивание в обычном состоянии цветом выбранного номера.
+            style.focusedBackground = coloredUnderline(style.focusedBackground, visuals); // Фон фокуса использует ту же переключаемую ссылку на цвет группы.
             control.setStyle(style); // Применяем отдельный стиль (красное подчёркивание ошибочного ввода остаётся штатным).
         }
         control.name = "buildwheel-appearance-" + field.key; // Задаём служебное имя поля для поиска в сцене и проверок.
@@ -208,13 +237,17 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         var metric = group.metric == null ? new Table() : buildControl(group.metric, widths.metric, synchronize, visuals); // Создаём размер или оставляем пустое место, если размера нет.
         var color = buildControl(group.colorField, widths.color, synchronize, visuals); // Создаём HEX-поле, управляющее цветом оформления всей группы.
         var alpha = buildControl(group.alphaField, widths.alpha, synchronize, visuals); // Создаём слайдер прозрачности с изменяемой видимостью собственной дорожки и бегунка.
+        synchronizeGroups.push(() => { // Запоминаем обновление этой группы при переключении номера колеса в меню.
+            visuals.color = appearance[group.color]; // Перепривязываем подчёркивания и слайдеры к цвету другого комплекта, не меняя старые Color.
+            for (var i = 0; i < synchronize.length; i++) synchronize[i](); // Обновляем текст, значения слайдеров, их окраску и видимость из выбранного appearance.
+        });
         var resetBlock = new Table(); // Создаём ячейку для кнопки сброса.
         resetBlock.add("").height(20); // Оставляем над кнопкой место высотой с подпись соседних полей.
         resetBlock.row(); // Располагаем кнопку на уровне полей ввода.
         var reset = resetBlock.button(Icon.refresh, Styles.cleari, () => { // Добавляем refresh и задаём его действие.
             var keys = []; // Собираем имена параметров, которые относятся к этой группе.
             for (var i = 0; i < group.fields.length; i++) keys.push(group.fields[i].key); // Не включаем параметры соседних групп.
-            wheelView.resetAppearance(keys); // Возвращаем выбранные параметры к исходному виду «колеса выбора» и «манекена».
+            wheelView.resetAppearance(editedWheel, keys); // Восстанавливаем заводской вид группы только у редактируемого номера.
             for (var i = 0; i < group.fields.length; i++) saveField(group.fields[i]); // Сохраняем значения, полученные после сброса.
             for (var i = 0; i < synchronize.length; i++) synchronize[i](); // Показываем эти значения в полях и подписях слайдеров.
             onChanged(group.metric != null && group.metric.key == "diameter"); // Помечаем настройки изменёнными; для диаметра также обновляем размеры обоих колёс.
@@ -237,8 +270,17 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         return table; // Возвращаем готовую группу для размещения под «манекеном».
     }
 
+    // ПЕРЕКЛЮЧЕНИЕ НОМЕРА БЕЗ ПЕРЕСОЗДАНИЯ ПОЛЕЙ
+    function selectWheel(number) { // Вызывается только при смене редактируемого колеса.
+        editedWheel = number; // Следующие изменения и сброс относятся к этому номеру.
+        appearance = wheelView.getVisual(number).appearance; // Меняем ссылку на существующий комплект; никакие параметры между номерами не копируются.
+        for (var i = 0; i < synchronizeGroups.length; i++) synchronizeGroups[i](); // Показываем новый комплект в тех же полях и стилях формы.
+    }
+
     // РАСЧЁТ ШИРИН И СБОРКА ВСЕЙ ФОРМЫ
-    function build(width) { // Вызывается меню при построении интерфейса; width задана в UI-единицах.
+    function build(width, number) { // Вызывается меню при построении интерфейса; width задана в UI-единицах, number задаёт редактируемое колесо.
+        synchronizeGroups = []; // Освобождаем ссылки на поля прежней сборки при открытии меню или изменении разрешения.
+        selectWheel(number == null ? editedWheel : number); // До создания полей выбираем комплект нужного номера без обращения к старой форме.
         var wide = width >= 450; // Выбираем один или два ряда элементов в каждой группе по доступной ширине.
         var widths = { // Общие ширины для всех групп: одинаковые типы полей получают одинаковое место.
             metric: wide ? 108 : (width - 6) / 2, // Ширина поля размера или слайдера доли внутреннего радиуса.
@@ -256,5 +298,5 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         return table; // Передаём меню форму для размещения под «манекеном».
     }
 
-    return {build: build}; // Открываем меню доступ к сборке формы; загрузка и обработчики остаются внутри этого редактора.
+    return {build: build, selectWheel: selectWheel, needsSave: needsSave}; // Меню переключает данные готовой формы и учитывает однократный перенос настроек при сохранении.
 };

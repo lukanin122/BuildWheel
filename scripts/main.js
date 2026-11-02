@@ -50,7 +50,7 @@ Events.on(ClientLoadEvent, () => {
     // Определяем наличие курсора на одном из секторов (в wheel.js). Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
     function sectorAt(stageX, stageY) {
         // wheel находится прямо в корне сцены: вычитание его позиции даёт локальные координаты.
-        return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y);
+        return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y, activeWheelNumber); // Проверяем сектор по визуалу открытого номера, включая его внутренний круг и число секторов.
     }
 
     function canSelectBlock(block) {
@@ -99,13 +99,22 @@ Events.on(ClientLoadEvent, () => {
         wheelScrollAmount = 0; // После закрытия не переносим незавершённый шаг прокрутки в следующее открытие.
     }
 
+    // ПЕРЕКЛЮЧЕНИЕ КОМПЛЕКТА БЕЗ СМЕЩЕНИЯ ЦЕНТРА КОЛЕСА
+    function setWheelNumber(number) { // Используется при открытии и переключении прокруткой.
+        var diameter = wheelView.getVisual(number).appearance.diameter; // Читаем диаметр нужного номера из уже загруженных данных.
+        var centerX = wheel.x + wheel.getWidth() / 2, centerY = wheel.y + wheel.getHeight() / 2; // Запоминаем прежний центр перед изменением размеров.
+        wheel.setSize(diameter, diameter); // Применяем размер выбранного комплекта к существующему виджету.
+        wheel.setPosition(centerX - diameter / 2, centerY - diameter / 2); // Сохраняем центр, даже если соседнее колесо больше или меньше предыдущего.
+        activeWheelNumber = number; // Рисование и выбор блока теперь используют комплект и слоты этого номера.
+        wheel.resetHoverSound(); // Первый наведённый сектор нового номера снова может издать звук.
+    }
+
     // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
     function openWheel(number) { // Общая функция для Shift + цифра и клавиши переключения прокруткой.
         mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); // Получаем положение курсора в момент открытия.
         Core.scene.screenToStageCoordinates(mousePosition); // Переводим экранные координаты в координаты сцены интерфейса.
-        wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); // Берём текущий диаметр из общих настроек «колеса выбора» и «манекена».
+        setWheelNumber(number); // Выбираем данные и диаметр именно открываемого номера.
         wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под курсором; у края экрана часть круга может обрезаться.
-        activeWheelNumber = number; // Выбираем набор из восьми слотов с указанным номером.
         wheelScrollAmount = 0; // Каждое открытие начинает отсчёт прокрутки с целого шага.
         wheelOpen = true; // Разрешаем отрисовку и выбор сектора.
         wheel.visible = true; // Показываем виджет на сцене.
@@ -151,7 +160,6 @@ Events.on(ClientLoadEvent, () => {
         getBlock: function(w, s) { return wheelSlots[w][s]; },
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
         wheelView: wheelView, // Тот же объект основы, с appearance, передаём манекену по ссылке.
-        resizeWheel: function() { wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); }, // Даём меню функцию установки общего диаметра у «колеса выбора».
         closeWheel: closeWheel
     });
 
@@ -282,8 +290,7 @@ Events.on(ClientLoadEvent, () => {
             wheelScrollAmount -= steps; // Оставляем только ещё не израсходованную дробную прокрутку.
             var nextNumber = ((activeWheelNumber + steps) % numberKeys.length + numberKeys.length) % numberKeys.length; // Переключаем циклически: 1–9, 0, снова 1 (формула работает и назад).
             if (nextNumber != activeWheelNumber) { // Десять полных шагов возвращают тот же номер и не требуют сброса наведения.
-                activeWheelNumber = nextNumber; // Меняем только набор слотов существующего виджета: центр колеса остаётся на прежнем месте.
-                wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
+                setWheelNumber(nextNumber); // Переключаем слоты и визуал, подгоняя диаметр без сдвига центра колеса.
             }
             return true; // Событие не доходит до KeyboardDevice и игрового zoom; все способы масштабирования из настроек игры остаются прежними.
         },

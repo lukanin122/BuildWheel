@@ -4,13 +4,13 @@
 var uiSounds = require("sounds"); // Этот же модуль использует меню; файлы звуков загружаются один раз.
 
 exports.create = function(api) {
-    var sectorCount = 8;
-    var sectorAngle = 360 / sectorCount;
+    var wheelCount = 10; // Десять номеров 0–9; порядок их переключения задаётся обработчиками ввода и меню.
+    var defaultSectorCount = 8; // Исходное количество секторов; каждый комплект визуала хранит собственное значение.
 
-    // Один объект настроек для обоих колёс. Отрисовка читает его заново каждый кадр,
-    // поэтому цвета, прозрачность и пропорции можно менять без создания нового Element.
+    // Общий образец заводских значений; по нему один раз создаём отдельный визуал для каждого номера.
+    // «Колесо выбора» и «манекен» одного номера используют один и тот же комплект данных.
     // После изменения diameter нужно также обновить размеры виджетов и раскладку меню.
-    var appearance = {
+    var appearanceDefaults = {
         diameter: 260, //диаметр круга
         innerRadiusRatio: 0.24, //какую часть от круга занимает внутренний радиус?
         backgroundColor: Color.white.cpy(), // Собственная копия: будущий редактор цвета не должен менять Color.white игры.
@@ -36,15 +36,24 @@ exports.create = function(api) {
         selectionHoverMix: 0.5 // Доля цвета наведения в выбранном секторе: 0 — только выделение, 1 — только наведение.
     };
 
-    // ИСХОДНЫЙ ВИД ДЛЯ КНОПОК СБРОСА
-    var appearanceDefaults = {}; // Отдельно запоминаем исходные параметры «колеса выбора» и «манекена».
-    for (var key in appearance) { // Перебираем имена всех параметров внешнего вида.
-        var value = appearance[key]; // Получаем исходное значение очередного параметра.
-        appearanceDefaults[key] = value instanceof Color ? value.cpy() : value; // Для Color сохраняем отдельную копию; для числа достаточно самого значения.
+    // ДЕСЯТЬ НЕЗАВИСИМЫХ КОМПЛЕКТОВ ВИЗУАЛА
+    var visuals = []; // Храним только параметры и Color; отдельные виджеты и фоновые обработчики для десяти номеров не создаём.
+    for (var number = 0; number < wheelCount; number++) { // Подготавливаем данные один раз при загрузке клиентской части.
+        var appearance = {}; // Собственный набор параметров этого номера.
+        for (var key in appearanceDefaults) { // Копируем заводской образец, общий для всех кнопок сброса.
+            var value = appearanceDefaults[key]; // Читаем число или исходный цвет.
+            appearance[key] = value instanceof Color ? value.cpy() : value; // Цвета обязательно копируем: изменение Color одного номера не должно менять другой.
+        }
+        visuals.push({appearance: appearance, sectorCount: defaultSectorCount}); // Визуал и количество секторов образуют один комплект для будущей системы сохранений.
+    }
+
+    function getVisual(number) { // Возвращаем существующий комплект по номеру без копирования и чтения настроек.
+        return visuals[number >= 0 && number < wheelCount && number == Math.floor(number) ? number : 1]; // Для ещё не открытого игрового колеса с номером -1 используем первый комплект.
     }
 
     // СБРОС ПАРАМЕТРОВ ОДНОЙ ГРУППЫ
-    function resetAppearance(keys) { // Меню передаёт массив имён параметров, относящихся к нажатой кнопке refresh.
+    function resetAppearance(number, keys) { // Меню передаёт номер колеса и параметры группы, у которой нажали refresh.
+        var appearance = getVisual(number).appearance; // Восстанавливаем только указанный номер, не затрагивая остальные девять.
         for (var i = 0; i < keys.length; i++) { // По очереди восстанавливаем только перечисленные параметры.
             var key = keys[i]; // Берём имя очередного параметра.
             if (!appearanceDefaults.hasOwnProperty(key)) continue; // Пропускаем имена, для которых нет исходного значения.
@@ -57,10 +66,10 @@ exports.create = function(api) {
     //=====================================================================
     //Запоминание и расчёта цвета для 'зелёного' сектора (ещё и) выделенного мышкой
     //=====================================================================
-    var previousSelectionColor = appearance.selectionColor.cpy(); // Цвет пересечения вычисляем заранее, а затем обновляем только при изменении исходных цветов или доли смешивания.
-    var previousHighlightColor = appearance.highlightColor.cpy(); // Копии сохраняют прежние значения даже при изменении того же объекта Color через set().
-    var previousHoverMix = appearance.selectionHoverMix;
-    var selectionHoverColor = appearance.selectionColor.cpy().lerp(appearance.highlightColor, previousHoverMix);
+    var previousSelectionColor = new Color(); // Один общий кэш смешанного цвета обслуживает рисуемое колесо; отдельные кэши для десяти комплектов не требуются.
+    var previousHighlightColor = new Color(); // Копия сохраняет прежние RGB даже при изменении исходного объекта Color через set().
+    var previousHoverMix = -1; // Несовпадение с исходной долей заставит вычислить цвет при первом использовании.
+    var selectionHoverColor = new Color(); // Повторно используем этот Color вместо создания объекта при каждом наведении.
     var mousePosition = new Vec2(); // Общий временный вектор: новые объекты при наведении не создаём.
 
     //сравнения цветовых каналов
@@ -69,7 +78,7 @@ exports.create = function(api) {
     }
 
     //Каждый раз, когда графический движок просит цвет для отрисовки, эта функция проверяет, не изменились ли настройки. Возрщает цвет.
-    function getSelectionHoverColor() {
+    function getSelectionHoverColor(appearance) { // Читаем цвета именно того номера, который сейчас рисуем.
         if (!sameRgb(previousSelectionColor, appearance.selectionColor)
             || !sameRgb(previousHighlightColor, appearance.highlightColor)
             || previousHoverMix != appearance.selectionHoverMix) {
@@ -85,7 +94,9 @@ exports.create = function(api) {
     // x/y — координаты ВНУТРИ Element, а не экрана или сцены.
     // Игровой ввод переводит свои координаты перед вызовом; слушатель манекена уже получает локальные.
     // Определяем номер сектора кружения мышки
-    function sectorAt(element, x, y) {
+    function sectorAt(element, x, y, wheelNumber) { // Номер связывает кликабельную область с тем же визуалом, который рисуется в виджете.
+        var visual = getVisual(wheelNumber), appearance = visual.appearance; // Получаем комплект текущего номера без промежуточных копий.
+        var sectorCount = visual.sectorCount, sectorAngle = 360 / sectorCount; // Геометрия использует сохранённое количество секторов этого колеса.
         var radius = element.getWidth() / 2;
         var dx = x - radius, dy = y - element.getHeight() / 2; //координаты мышки относительно центра круга, а не угла экрана
         var distanceSquared = dx * dx + dy * dy; //удаленность курсора от центра круга
@@ -97,15 +108,15 @@ exports.create = function(api) {
     }
 
     // Определяем над каким сектором кружит мышка
-    function hoveredSectorAt(element) {
+    function hoveredSectorAt(element, wheelNumber) {
         if (Core.scene.getHoverElement() !== element) return -1; //навелись ли на колесо?
         mousePosition.set(Core.input.mouseX(), Core.input.mouseY());//записывает координаты мыши в вектор
         element.screenToLocalCoordinates(mousePosition);//координаты в локальные
-        return sectorAt(element, mousePosition.x, mousePosition.y);//возвращаем номер сектора
+        return sectorAt(element, mousePosition.x, mousePosition.y, wheelNumber); // Проверяем наведение с долей внутреннего круга и числом секторов текущего номера.
     }
 
     // Закраски сектора с наведённой сверху мышкой; (геометрия совпадает sectorAt).
-    function drawSector(centerX, centerY, radius, sector) {
+    function drawSector(centerX, centerY, radius, sector, appearance, sectorAngle) { // Используем уже выбранные параметры рисуемого колеса.
         var innerRadius = radius * appearance.innerRadiusRatio;
         var start = sector * sectorAngle - sectorAngle / 2; //угол левой линии нужного сектора
         for (var part = 0; part < 6; part++) { // Сектор состоит из шести четырёхугольников; больше частей даёт более плавную дугу.
@@ -123,6 +134,8 @@ exports.create = function(api) {
     }
 
     function draw(element, wheelNumber, hoveredSector, selectedSector, options) {
+        var visual = getVisual(wheelNumber), appearance = visual.appearance; // За один вызов рисуем только комплект нужного номера.
+        var sectorCount = visual.sectorCount, sectorAngle = 360 / sectorCount; // Количество секторов и их угол берём из этого же комплекта.
         var radius = element.getWidth() / 2;
         var centerX = element.x + radius;
         var centerY = element.y + element.getHeight() / 2;
@@ -137,12 +150,12 @@ exports.create = function(api) {
         if (hoveredSector >= 0 && hoveredSector < sectorCount && hoveredSector != selectedSector) {
             Draw.color(appearance.highlightColor);
             Draw.alpha(appearance.highlightAlpha);
-            drawSector(centerX, centerY, radius, hoveredSector);
+            drawSector(centerX, centerY, radius, hoveredSector, appearance, sectorAngle);
         }
         if (selectedSector >= 0 && selectedSector < sectorCount) {
-            Draw.color(selectedSector == hoveredSector ? getSelectionHoverColor() : appearance.selectionColor);
+            Draw.color(selectedSector == hoveredSector ? getSelectionHoverColor(appearance) : appearance.selectionColor);
             Draw.alpha(appearance.selectionAlpha); // Совпадение с наведением меняет RGB, но не прозрачность выделения.
-            drawSector(centerX, centerY, radius, selectedSector);
+            drawSector(centerX, centerY, radius, selectedSector, appearance, sectorAngle);
         }
 
         Draw.color(appearance.centerColor);
@@ -202,7 +215,7 @@ exports.create = function(api) {
     }
 
     // Фабрика — аналог метода Java, создающего настроенный анонимный наследник Element.
-    // Каждый вызов создаёт отдельный виджет-колесо, но геометрия и appearance у обоих общие.
+    // Каждый вызов создаёт виджет; общий код рисования сам выбирает комплект по getWheelNumber.
     function createElement(options) {
         var previousHoveredSector = -1;
         var previousWheelNumber = -1;
@@ -217,7 +230,7 @@ exports.create = function(api) {
                     return;
                 }
                 var wheelNumber = options.getWheelNumber();
-                var hoveredSector = hoveredSectorAt(this);
+                var hoveredSector = hoveredSectorAt(this, wheelNumber); // Наведение и отрисовка используют один и тот же номер.
                 var selectedSector = options.getSelectedSector == null ? -1 : options.getSelectedSector();
                 draw(this, wheelNumber, hoveredSector, selectedSector, options);
                 if (hoveredSector != -1 && (hoveredSector != previousHoveredSector || wheelNumber != previousWheelNumber)) {
@@ -231,7 +244,8 @@ exports.create = function(api) {
         // У 'манекена' обычный Element.hit, чтобы не перекрывать остальные кнопки меню.
         if (options.hit != null) methods.hit = options.hit; //Если в объекте настроек передан кастомный метод, то добавим его в создаваемый набор методов methods.hit (зона клика мышки по виджету)
         var element = extend(Element, methods); //UI-виджет кастомных методов
-        element.setSize(appearance.diameter, appearance.diameter);
+        var diameter = getVisual(options.getWheelNumber()).appearance.diameter; // Задаём начальный размер по номеру; переключение размера выполняется при выборе другого колеса.
+        element.setSize(diameter, diameter);
 
         //сброс состояния наведения при входе курсора мыши в область колеса или выходе
         element.addListener(extend(InputListener, {
@@ -246,10 +260,11 @@ exports.create = function(api) {
     }
 
     return {
-        appearance: appearance,
+        wheelCount: wheelCount, // Общий предел номеров для меню и хранения данных.
+        defaultSectorCount: defaultSectorCount, // Исходное число секторов для ещё не настроенного комплекта.
+        getVisual: getVisual, // Открываем доступ к комплекту {appearance, sectorCount} по номеру; данные не копируются.
         appearanceDefaults: appearanceDefaults, // Предоставляем исходные значения внешнего вида (цвета хранятся отдельными копиями).
         resetAppearance: resetAppearance, // Даём меню функцию восстановления выбранных параметров по их именам.
-        sectorCount: sectorCount,
         sectorAt: sectorAt,
         createElement: createElement
     };

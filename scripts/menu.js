@@ -17,8 +17,7 @@ var paletteModule = require("palette"); // Подключаем отдельно
 // явно переданные из main.js; обратного require("main") здесь нет.
 exports.create = function(api) {
     var wheelView = api.wheelView; // Общая основа с игровым колесом; настройки внешнего вида не копируем.
-    var wheelCount = 10; // Номер колеса 0–9.
-    var sectorCount = wheelView.sectorCount;
+    var wheelCount = wheelView.wheelCount; // Число номеров берём из общей основы колёс; у каждого номера свой комплект визуала.
     var settingsPrefix = "buildwheel.slot."; // Начало ключей Core.settings: отделяет наши настройки от настроек других модов.
     var iconScales = []; // Таблица [колесо][сектор]: 1 = 100%, 0.4 = 40%, 2 = 200%.
     var settingsChanged = false; // Условие вынуждающее к записи данных на диск.
@@ -66,9 +65,9 @@ exports.create = function(api) {
     // СВЯЗЬ НАСТРОЕК ВИДА С МЕНЮ
     var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
         settingsChanged = true; // Отмечаем, что настройки потребуется записать на диск при закрытии меню.
-        if (diameterChanged) resizePreview(); // Подгоняем размеры «колеса выбора» и «манекена», сохраняя созданные поля и фокус ввода.
+        if (diameterChanged) resizePreview(); // Подгоняем «манекен» редактируемого номера, сохраняя поля и фокус ввода; игровое колесо возьмёт диаметр при открытии.
     });
-    if (api.resizeWheel != null) api.resizeWheel(); // Применяем к «колесу выбора» диаметр, который редактор прочитал из сохранённых настроек.
+    if (appearanceEditor.needsSave) settingsChanged = true; // Сохраняем индивидуальные комплекты, впервые созданные из прежнего общего вида.
 
     // ------------------------------------------------------------
     // КЛЮЧИ НАСТРОЕК И ПРОВЕРКА НОМЕРОВ
@@ -86,8 +85,8 @@ exports.create = function(api) {
     }
 
     function getIconScale(wheelNumber, sectorNumber) {
-        if (!validIndex(wheelNumber, wheelCount) || !validIndex(sectorNumber, sectorCount)) return 1; // Защита от неверных номеров: возвращаем обычный масштаб 100%.
-        return iconScales[wheelNumber][sectorNumber];
+        if (!validIndex(wheelNumber, wheelCount) || !validIndex(sectorNumber, wheelView.getVisual(wheelNumber).sectorCount)) return 1; // Проверяем сектор по комплекту именно этого номера.
+        return iconScales[wheelNumber][sectorNumber] || 1; // Ещё не настроенный сектор использует масштаб 100%, в том числе после будущего увеличения числа секторов.
     }
 
     // ------------------------------------------------------------
@@ -96,7 +95,7 @@ exports.create = function(api) {
     // Core.settings хранит имена блоков.
     for (var w = 0; w < wheelCount; w++) {
         iconScales[w] = []; // Каждому колесу создаём свой массив 'масштабов иконок'.
-        for (var s = 0; s < sectorCount; s++) {
+        for (var s = 0; s < wheelView.getVisual(w).sectorCount; s++) { // Количество слотов загружаем из того же комплекта, который используется для рисования этого номера.
             var key = slotKey(w, s); // генерирует персональные текстовые адреса каждому сектору
             var savedName = String(Core.settings.getString(key + ".block", "")); //проверяем сохранененные адреса и при наличии вытягиваем те блоки из Core.settings
             if (savedName.length > 0) {// Если мод с блоком удалён, content.block вернёт null: слот пуст.
@@ -133,8 +132,9 @@ exports.create = function(api) {
         if (sectorLabel == null) return; // До buildInterface иконок ещё может не быть для обновления
         var selected = editedSector >= 0; // Есть ли 'зелёный' сектор, для которого разрешено менять настройки?
         var block = selected ? api.getBlock(editedWheel, editedSector) : null; //ставим нужный блок
+        var sectorName = wheelView.getVisual(editedWheel).sectorCount == 8 ? directionNames[editedSector] : "Сектор " + (editedSector + 1); // Названия сторон света подходят восьми секторам; для другого числа используем номер.
         sectorLabel.setText(selected
-            ? directionNames[editedSector] + ": " + (block == null ? "пустой слот" : String(block.localizedName))
+            ? sectorName + ": " + (block == null ? "пустой слот" : String(block.localizedName))
             : "Выберите сектор на колесе"); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
         clearSlotButton.visible = selected; // Показываем кнопку 'Сброс блока' у выбранного 'зелёному' сектору.
@@ -325,7 +325,7 @@ exports.create = function(api) {
         preview.addListener(extend(InputListener, {
             touchDown: function(event, x, y, pointer, button) {
                 if (button != KeyCode.mouseLeft) return false;
-                var sector = wheelView.sectorAt(preview, x, y); // Те же границы кольца и нумерация, что в игре.
+                var sector = wheelView.sectorAt(preview, x, y, editedWheel); // Границы кольца и число секторов соответствуют визуалу редактируемого номера.
                 if (sector != -1) selectSector(sector); // Центр и углы не меняют выбранный сектор.
                 return true;
             }
@@ -356,11 +356,10 @@ exports.create = function(api) {
         return group;
     }
 
-    // ПОДГОНКА РАЗМЕРОВ ОБОИХ КОЛЁС
+    // ПОДГОНКА РАЗМЕРА МАНЕКЕНА ПОД ВИЗУАЛ ЕГО НОМЕРА
     function resizePreview() { // Применяем изменение диаметра без пересоздания формы настроек.
-        if (api.resizeWheel != null) api.resizeWheel(); // Устанавливаем общий диаметр у «колеса выбора» через функцию из main.js.
         if (previewWidget == null) return; // Если «манекен» ещё не создан, больше изменять нечего.
-        previewSize = wheelView.appearance.diameter; // Получаем актуальный диаметр из общих параметров внешнего вида.
+        previewSize = wheelView.getVisual(editedWheel).appearance.diameter; // Читаем диаметр редактируемого номера; скрытое игровое колесо подгонится при своём открытии.
         var uiSize = previewSize / Scl.scl(); // Переводим диаметр в UI-единицы (ячейки Cell сами применяют масштаб интерфейса).
         previewWidget.setSize(previewSize, previewSize); // Задаём ширину и высоту самого круга «манекена».
         previewGroup.setSize(previewSize, previewSize); // Подгоняем границы группы, которая содержит круг и кнопки в углах.
@@ -394,7 +393,7 @@ exports.create = function(api) {
         var screenHeight = Core.scene.getHeight() / Scl.scl();// размеры сцены в UI-единицы, сохраняя доли экрана при любом масштабе UI.
         var contentWidth = screenWidth * 0.92; // Всё содержимое занимает 92% ширины экрана.
         var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
-        previewSize = wheelView.appearance.diameter; // Один источник размера для манекена и игрового колеса.
+        previewSize = wheelView.getVisual(editedWheel).appearance.diameter; // «Манекен» получает размер из комплекта выбранного номера.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
         var appearanceWidth = Math.max(240, Math.min(contentWidth * 0.45 + 40, 600)); // Выбираем ширину формы по экрану (запас 40 распределяется между полями размера и HEX).
         baseRightWidth = Math.max(contentWidth * 0.45, appearanceWidth); // Задаём минимальную ширину правой панели по экрану и форме настроек.
@@ -484,6 +483,8 @@ exports.create = function(api) {
             editedWheel = Math.round(value) % wheelCount; // Позиции 1–9 сохраняют номер; позиция 10 превращается в номер 0.
             editedSector = -1; // При смене колеса прежний сектор автоматически не выбираем.
             wheelLabel.setText("Колесо " + editedWheel);
+            appearanceEditor.selectWheel(editedWheel); // Переключаем значения полей, подчёркивания и слайдеры на независимый визуал этого номера.
+            resizePreview(); // Подгоняем тот же виджет «манекена» и угловые кнопки под диаметр другого комплекта.
             refreshSectorControls(); //обновляем видимые настройки сектора
         });
         var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
@@ -516,7 +517,7 @@ exports.create = function(api) {
         previewCell = editor.add(createPreview()).size(previewUiSize); // Создаём «манекен» и сохраняем его ячейку (Cell применяет масштаб UI к указанному размеру).
         right.add(editor).top();
         right.row(); // Следующий ряд правой панели отводим настройкам внешнего вида.
-        right.add(appearanceEditor.build(appearanceWidth)).width(appearanceWidth).left().padTop(12); // Строим форму и располагаем под «манекеном» с верхним отступом.
+        right.add(appearanceEditor.build(appearanceWidth, editedWheel)).width(appearanceWidth).left().padTop(12); // Строим форму для выбранного номера под «манекеном» с верхним отступом.
         rightPanelCell = body.add(right).width(rightWidth).padLeft(12).top(); // Добавляем правую панель в меню и сохраняем её ячейку для изменения ширины.
 
 
