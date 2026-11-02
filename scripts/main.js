@@ -18,6 +18,8 @@ Events.on(ClientLoadEvent, () => {
         KeyCode.num0, KeyCode.num1, KeyCode.num2, KeyCode.num3, KeyCode.num4,
         KeyCode.num5, KeyCode.num6, KeyCode.num7, KeyCode.num8, KeyCode.num9
     ];
+    var wheelScrollKey = KeyCode.capsLock; // Временная клавиша открытия и переключения колёс прокруткой; позднее её можно получать из настроек.
+    var wheelScrollAmount = 0; // Накапливаем дробную прокрутку: одна полная единица переключает одно колесо.
 
     // 2) Отдельные восемь слотов для каждого колеса 0–9.
     // null означает пустой слот; непустой слот хранит сам объект Block.
@@ -94,6 +96,20 @@ Events.on(ClientLoadEvent, () => {
         activeWheelNumber = -1;
         wheel.visible = false;
         pendingSelection = null; // Отменяет ещё не выполненный запрос выбора.
+        wheelScrollAmount = 0; // После закрытия не переносим незавершённый шаг прокрутки в следующее открытие.
+    }
+
+    // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
+    function openWheel(number) { // Общая функция для Shift + цифра и клавиши переключения прокруткой.
+        mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); // Получаем положение курсора в момент открытия.
+        Core.scene.screenToStageCoordinates(mousePosition); // Переводим экранные координаты в координаты сцены интерфейса.
+        wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); // Берём текущий диаметр из общих настроек «колеса выбора» и «манекена».
+        wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под курсором; у края экрана часть круга может обрезаться.
+        activeWheelNumber = number; // Выбираем набор из восьми слотов с указанным номером.
+        wheelScrollAmount = 0; // Каждое открытие начинает отсчёт прокрутки с целого шага.
+        wheelOpen = true; // Разрешаем отрисовку и выбор сектора.
+        wheel.visible = true; // Показываем виджет на сцене.
+        wheel.toFront(); // Размещаем колесо поверх остальных элементов интерфейса.
     }
 
     //==============================================================
@@ -197,7 +213,7 @@ Events.on(ClientLoadEvent, () => {
     Events.on(ResetEvent, () => closeWheel()); // Сброс мира - сброс колеса
 
     //==============================================================
-    // 1.2) Shift + цифра - отрисовка выбранного колеса поверх интерфейса по координатам курсора.
+    // 1.2) Shift + цифра или Caps Lock + прокрутка — открытие и переключение колёс.
     //==============================================================
     // InputProcessor — интерфейс Arc.
     Core.input.getInputMultiplexer().addProcessor(0, extend(InputProcessor, {//getInputMultiplexer() отбирает приоритет у keyDown, keyTap и keyRelease - риск при других модах
@@ -216,6 +232,14 @@ Events.on(ClientLoadEvent, () => {
                 || Core.input.keyDown(KeyCode.mouseLeft)
                 || Core.input.keyDown(KeyCode.mouseRight)) return false;
 
+            if (key == wheelScrollKey) { // Отдельная клавиша открывает колесо №1 без удержания Shift.
+                if (!Core.input.keyDown(wheelScrollKey)) { // Автоповтор удерживаемой клавиши не возвращает выбранный номер обратно к 1.
+                    openWheel(1); // Начинаем переключение с первого колеса и фиксируем его положение под курсором.
+                    Core.input.getKeyboard().scrolled(0, 0); // Убираем прокрутку, которая могла попасть в игровой zoom ранее в этом же кадре.
+                }
+                return false; // Даём KeyboardDevice запомнить физическое удержание клавиши (состояние индикатора Caps Lock не используется).
+            }
+
             var shiftPressed = Core.input.keyDown(KeyCode.shiftLeft) //определяем, нажата ли клавиша Shift (левая или правая)
                 || Core.input.keyDown(KeyCode.shiftRight);
             if (!shiftPressed) return false;
@@ -230,31 +254,38 @@ Events.on(ClientLoadEvent, () => {
             }
             if (pressedNumber == -1) return false;
 
-            mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); //координаты мыши
-            Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
-            wheel.setSize(wheelView.appearance.diameter, wheelView.appearance.diameter); // При открытии берём актуальный общий размер.
-            wheel.setPosition(
-                mousePosition.x - wheel.getWidth() / 2,
-                mousePosition.y - wheel.getHeight() / 2
-            );
-
-            //* Позиция фиксируется в момент открытия и не следует за мышью.
-            //* У края экрана круг может обрезаться: центр остаётся под курсором.
-            activeWheelNumber = pressedNumber;
-            wheelOpen = true;
-            wheel.visible = true; //Включаем отрисовку колеса, чтобы оно отрисовывалось в draw() и было доступно для клика мышью.
-            wheel.toFront(); // Перемещаем wheel в конец корневой группы, чтобы он рисовался поверх остальных элементов интерфейса.
-
+            openWheel(pressedNumber); // Прежний способ Shift + цифра использует то же открытие и позиционирование.
             return false;
         },
 
         // 3) Отпускания клавиш меню должны обрабатываться при открытом меню, которые так-то блокируется при запуске.
         keyUp: function(key) {
+            if (key == wheelScrollKey) wheelScrollAmount = 0; // Отпускание прекращает переключение прокруткой, оставляя само колесо открытым.
             if (key == KeyCode.minus && settingsMinusCaptured) {
                 settingsMinusCaptured = false;
                 return true;
             }
             return settingsMenu.handleKeyUp(key);
+        },
+
+        // ПЕРЕКЛЮЧЕНИЕ НОМЕРОВ ПРОКРУТКОЙ БЕЗ МАСШТАБИРОВАНИЯ КАРТЫ
+        scrolled: function(amountX, amountY) { // Arc передаёт прокрутку вперёд отрицательным amountY, назад — положительным.
+            if (!Core.input.keyDown(wheelScrollKey) || !Vars.state.isGame()) return false; // Обычную прокрутку без удержания клавиши и в главном меню не перехватываем.
+            if (wheelInputBlocked()) { // Диалоги, ввод текста и выделение области сохраняют приоритет перед колесом.
+                closeWheel(); // Закрываем колесо, если другое окно успело появиться перед событием прокрутки.
+                return !(Core.scene.hasDialog() || Core.scene.hasKeyboard()); // Прокрутку открытого интерфейса пропускаем; при выделении области продолжаем блокировать масштабирование карты.
+            }
+            if (!wheelOpen || capturedLeft || capturedRight) return true; // После выбора или отмены не открываем колесо заново; карту до отпускания клавиши всё ещё не масштабируем.
+            wheelScrollAmount -= amountY; // Меняем направление: прокрутка вперёд увеличивает номер, назад уменьшает.
+            var steps = wheelScrollAmount >= 0 ? Math.floor(wheelScrollAmount) : Math.ceil(wheelScrollAmount); // Выделяем полные шаги, сохраняя дробную часть для плавных колёсиков и тачпадов.
+            if (steps == 0) return true; // Неполный шаг поглощаем, чтобы игра не использовала его для масштабирования.
+            wheelScrollAmount -= steps; // Оставляем только ещё не израсходованную дробную прокрутку.
+            var nextNumber = ((activeWheelNumber + steps) % numberKeys.length + numberKeys.length) % numberKeys.length; // Переключаем циклически: 1–9, 0, снова 1 (формула работает и назад).
+            if (nextNumber != activeWheelNumber) { // Десять полных шагов возвращают тот же номер и не требуют сброса наведения.
+                activeWheelNumber = nextNumber; // Меняем только набор слотов существующего виджета: центр колеса остаётся на прежнем месте.
+                wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
+            }
+            return true; // Событие не доходит до KeyboardDevice и игрового zoom; все способы масштабирования из настроек игры остаются прежними.
         },
 
         //==============================================================
