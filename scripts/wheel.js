@@ -51,6 +51,24 @@ exports.create = function(api) {
         return visuals[number >= 0 && number < wheelCount && number == Math.floor(number) ? number : 1]; // Для ещё не открытого игрового колеса с номером -1 используем первый комплект.
     }
 
+    // ЗАКРЕПЛЕНИЕ ОДНОГО ВИЗУАЛА ДЛЯ ИГРОВЫХ КОЛЁС
+    var sharedVisualNumber = 1; // При отсутствии настройки все игровые номера используют визуал колеса №1.
+    try { // Неверный тип настройки не должен мешать загрузке мода.
+        var savedSharedNumber = Number(Core.settings.getInt("buildwheel.sharedVisual", 1)); // -1 означает отдельные визуалы, 0–9 — закреплённый номер.
+        if (savedSharedNumber >= -1 && savedSharedNumber < wheelCount) sharedVisualNumber = savedSharedNumber; // Принимаем только существующий номер или отключение закрепления.
+    } catch (error) { // Повреждённая настройка оставляет закрепление первого номера.
+    }
+
+    function getDisplayVisual(number) { // Выбираем действующий игровой визуал без копирования параметров остальных девяти номеров.
+        return getVisual(sharedVisualNumber < 0 ? number : sharedVisualNumber); // Неактивные комплекты остаются обычными данными и не обрабатываются при рисовании.
+    }
+
+    function setSharedVisual(number) { // Кнопка замка передаёт номер для закрепления либо -1 для отдельных визуалов.
+        if (number < -1 || number >= wheelCount || number != Math.floor(number)) return; // Не записываем несуществующий номер.
+        sharedVisualNumber = number; // Последующие открытия сразу используют выбранный режим.
+        Core.settings.put("buildwheel.sharedVisual", new java.lang.Integer(String(number))); // Меняем настройку в памяти; меню записывает её при закрытии.
+    }
+
     // СБРОС ПАРАМЕТРОВ ОДНОЙ ГРУППЫ
     function resetAppearance(number, keys) { // Меню передаёт номер колеса и параметры группы, у которой нажали refresh.
         var appearance = getVisual(number).appearance; // Восстанавливаем только указанный номер, не затрагивая остальные девять.
@@ -94,8 +112,8 @@ exports.create = function(api) {
     // x/y — координаты ВНУТРИ Element, а не экрана или сцены.
     // Игровой ввод переводит свои координаты перед вызовом; слушатель манекена уже получает локальные.
     // Определяем номер сектора кружения мышки
-    function sectorAt(element, x, y, wheelNumber) { // Номер связывает кликабельную область с тем же визуалом, который рисуется в виджете.
-        var visual = getVisual(wheelNumber), appearance = visual.appearance; // Получаем комплект текущего номера без промежуточных копий.
+    function sectorAt(element, x, y, wheelNumber, useSharedVisual) { // Последний аргумент включает закреплённый визуал при обработке игрового колеса.
+        var visual = useSharedVisual ? getDisplayVisual(wheelNumber) : getVisual(wheelNumber), appearance = visual.appearance; // Попадание мыши использует тот же комплект, что и рисование.
         var sectorCount = visual.sectorCount, sectorAngle = 360 / sectorCount; // Геометрия использует сохранённое количество секторов этого колеса.
         var radius = element.getWidth() / 2;
         var dx = x - radius, dy = y - element.getHeight() / 2; //координаты мышки относительно центра круга, а не угла экрана
@@ -108,11 +126,11 @@ exports.create = function(api) {
     }
 
     // Определяем над каким сектором кружит мышка
-    function hoveredSectorAt(element, wheelNumber) {
+    function hoveredSectorAt(element, wheelNumber, useSharedVisual) { // У игрового колеса геометрия может быть взята из закреплённого номера.
         if (Core.scene.getHoverElement() !== element) return -1; //навелись ли на колесо?
         mousePosition.set(Core.input.mouseX(), Core.input.mouseY());//записывает координаты мыши в вектор
         element.screenToLocalCoordinates(mousePosition);//координаты в локальные
-        return sectorAt(element, mousePosition.x, mousePosition.y, wheelNumber); // Проверяем наведение с долей внутреннего круга и числом секторов текущего номера.
+        return sectorAt(element, mousePosition.x, mousePosition.y, wheelNumber, useSharedVisual); // Передаём режим закрепления в общую проверку границ сектора.
     }
 
     // Закраски сектора с наведённой сверху мышкой; (геометрия совпадает sectorAt).
@@ -134,7 +152,7 @@ exports.create = function(api) {
     }
 
     function draw(element, wheelNumber, hoveredSector, selectedSector, options) {
-        var visual = getVisual(wheelNumber), appearance = visual.appearance; // За один вызов рисуем только комплект нужного номера.
+        var visual = options.useSharedVisual ? getDisplayVisual(wheelNumber) : getVisual(wheelNumber), appearance = visual.appearance; // Игровое колесо учитывает замок; «манекен» позволяет готовить собственный визуал выбранного номера.
         var sectorCount = visual.sectorCount, sectorAngle = 360 / sectorCount; // Количество секторов и их угол берём из этого же комплекта.
         var radius = element.getWidth() / 2;
         var centerX = element.x + radius;
@@ -230,7 +248,7 @@ exports.create = function(api) {
                     return;
                 }
                 var wheelNumber = options.getWheelNumber();
-                var hoveredSector = hoveredSectorAt(this, wheelNumber); // Наведение и отрисовка используют один и тот же номер.
+                var hoveredSector = hoveredSectorAt(this, wheelNumber, options.useSharedVisual); // Наведение учитывает тот же режим закрепления, что и рисование.
                 var selectedSector = options.getSelectedSector == null ? -1 : options.getSelectedSector();
                 draw(this, wheelNumber, hoveredSector, selectedSector, options);
                 if (hoveredSector != -1 && (hoveredSector != previousHoveredSector || wheelNumber != previousWheelNumber)) {
@@ -244,7 +262,8 @@ exports.create = function(api) {
         // У 'манекена' обычный Element.hit, чтобы не перекрывать остальные кнопки меню.
         if (options.hit != null) methods.hit = options.hit; //Если в объекте настроек передан кастомный метод, то добавим его в создаваемый набор методов methods.hit (зона клика мышки по виджету)
         var element = extend(Element, methods); //UI-виджет кастомных методов
-        var diameter = getVisual(options.getWheelNumber()).appearance.diameter; // Задаём начальный размер по номеру; переключение размера выполняется при выборе другого колеса.
+        var visual = options.useSharedVisual ? getDisplayVisual(options.getWheelNumber()) : getVisual(options.getWheelNumber()); // Выбираем начальный комплект с учётом назначения виджета.
+        var diameter = visual.appearance.diameter; // Задаём начальный размер; переключение размера выполняется при выборе другого колеса.
         element.setSize(diameter, diameter);
 
         //сброс состояния наведения при входе курсора мыши в область колеса или выходе
@@ -263,6 +282,8 @@ exports.create = function(api) {
         wheelCount: wheelCount, // Общий предел номеров для меню и хранения данных.
         defaultSectorCount: defaultSectorCount, // Исходное число секторов для ещё не настроенного комплекта.
         getVisual: getVisual, // Открываем доступ к комплекту {appearance, sectorCount} по номеру; данные не копируются.
+        getDisplayVisual: getDisplayVisual, // Игровой виджет получает закреплённый либо собственный визуал.
+        getSharedVisualNumber: () => sharedVisualNumber, setSharedVisual: setSharedVisual, // Меню читает и переключает замок без обхода всех комплектов.
         appearanceDefaults: appearanceDefaults, // Предоставляем исходные значения внешнего вида (цвета хранятся отдельными копиями).
         resetAppearance: resetAppearance, // Даём меню функцию восстановления выбранных параметров по их именам.
         sectorAt: sectorAt,

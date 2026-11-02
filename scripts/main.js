@@ -50,7 +50,7 @@ Events.on(ClientLoadEvent, () => {
     // Определяем наличие курсора на одном из секторов (в wheel.js). Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
     function sectorAt(stageX, stageY) {
         // wheel находится прямо в корне сцены: вычитание его позиции даёт локальные координаты.
-        return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y, activeWheelNumber); // Проверяем сектор по визуалу открытого номера, включая его внутренний круг и число секторов.
+        return wheelView.sectorAt(wheel, stageX - wheel.x, stageY - wheel.y, activeWheelNumber, true); // Проверяем сектор по действующему игровому визуалу, включая закрепление замком.
     }
 
     function canSelectBlock(block) {
@@ -68,6 +68,7 @@ Events.on(ClientLoadEvent, () => {
     //==============================================================
     // Общая фабрика создаёт Element. Здесь задаём только поведение 'колеса выбора'.
     var wheel = wheelView.createElement({
+        useSharedVisual: true, // Игровое колесо использует закреплённый визуал, если замок включён.
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
         getIconAlpha: function(block) {// Проверяем доступность блока в этом мире; количество ресурсов здесь не проверяется.
@@ -101,24 +102,26 @@ Events.on(ClientLoadEvent, () => {
 
     // ПЕРЕКЛЮЧЕНИЕ КОМПЛЕКТА БЕЗ СМЕЩЕНИЯ ЦЕНТРА КОЛЕСА
     function setWheelNumber(number) { // Используется при открытии и переключении прокруткой.
-        var diameter = wheelView.getVisual(number).appearance.diameter; // Читаем диаметр нужного номера из уже загруженных данных.
+        var diameter = wheelView.getDisplayVisual(number).appearance.diameter; // Читаем диаметр действующего визуала с учётом закрепления замком.
         var centerX = wheel.x + wheel.getWidth() / 2, centerY = wheel.y + wheel.getHeight() / 2; // Запоминаем прежний центр перед изменением размеров.
         wheel.setSize(diameter, diameter); // Применяем размер выбранного комплекта к существующему виджету.
         wheel.setPosition(centerX - diameter / 2, centerY - diameter / 2); // Сохраняем центр, даже если соседнее колесо больше или меньше предыдущего.
         activeWheelNumber = number; // Рисование и выбор блока теперь используют комплект и слоты этого номера.
-        wheel.resetHoverSound(); // Первый наведённый сектор нового номера снова может издать звук.
+        wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
     }
 
     // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
     function openWheel(number) { // Общая функция для Shift + цифра и клавиши переключения прокруткой.
-        mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); // Получаем положение курсора в момент открытия.
-        Core.scene.screenToStageCoordinates(mousePosition); // Переводим экранные координаты в координаты сцены интерфейса.
+        mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); //координаты мыши
+        Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
         setWheelNumber(number); // Выбираем данные и диаметр именно открываемого номера.
         wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под курсором; у края экрана часть круга может обрезаться.
+        //* Позиция фиксируется в момент открытия и не следует за мышью.
+        //* У края экрана круг может обрезаться: центр остаётся под курсором.
         wheelScrollAmount = 0; // Каждое открытие начинает отсчёт прокрутки с целого шага.
         wheelOpen = true; // Разрешаем отрисовку и выбор сектора.
-        wheel.visible = true; // Показываем виджет на сцене.
-        wheel.toFront(); // Размещаем колесо поверх остальных элементов интерфейса.
+        wheel.visible = true; //Включаем отрисовку колеса, чтобы оно отрисовывалось в draw() и было доступно для клика мышью.
+        wheel.toFront(); // Перемещаем wheel в конец корневой группы, чтобы он рисовался поверх остальных элементов интерфейса.
     }
 
     //==============================================================

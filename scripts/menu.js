@@ -6,6 +6,9 @@
 var uiSounds = require("sounds"); // Общий модуль уже загружает только четыре используемых звука.
 var appearanceMenuModule = require("appearance-menu"); // Подключаем модуль полей внешнего вида «колеса выбора» и «манекена».
 var paletteModule = require("palette"); // Подключаем отдельное окно палитры, которое копирует выбранный цвет в буфер обмена.
+var libraryModule = require("wheel-library"); // Хранилище независимых снимков четырёх типов.
+var snapshotsModule = require("wheel-snapshots"); // Получение и проверяемое применение визуала, блоков, колеса или набора.
+var browserModule = require("wheel-browser"); // Браузер сохранений и штатные плашки ввода имени.
 
 // ------------------------------------------------------------
 // СОЗДАНИЕ РЕДАКТОРА И ЕГО СОСТОЯНИЕ
@@ -45,6 +48,10 @@ exports.create = function(api) {
     var previewCell, scaleSliderCell, sectorLabelCell, rightPanelCell; // Ячейки таблиц, размеры которых меняются вместе с диаметром «манекена».
     var baseRightWidth = 0; // Минимальная ширина правой панели, необходимая для её надписей и полей настроек.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
+    var saves = null, lockButton = null, lockLabel = null; // Ссылки на браузер и кнопку закрепления текущей сборки меню.
+    var previewRowCell = null; // Ячейка объединяет «манекен» и боковые кнопки, не сдвигая круг дополнительной колонкой.
+    var toolsSize = 40, toolsHeight = 258, toolsReserve = 48; // Шесть квадратных кнопок, пять зазоров по 2 и дополнительный зазор 8 после замка.
+    var applyingSavedData = false; // Во время применения набора подгоняем раскладку только один раз после всех десяти комплектов.
     var palette = paletteModule.create(() => { settingsChanged = true; }, () => { // Создаём палитру с уведомлениями об изменении настройки и закрытии окна.
         if (dialog.isShown()) Core.scene.setScrollFocus(blockPane); // При возврате из палитры передаём колёсико мыши актуальному списку блоков.
     });
@@ -65,7 +72,7 @@ exports.create = function(api) {
     // СВЯЗЬ НАСТРОЕК ВИДА С МЕНЮ
     var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
         settingsChanged = true; // Отмечаем, что настройки потребуется записать на диск при закрытии меню.
-        if (diameterChanged) resizePreview(); // Подгоняем «манекен» редактируемого номера, сохраняя поля и фокус ввода; игровое колесо возьмёт диаметр при открытии.
+        if (diameterChanged && !applyingSavedData) resizePreview(); // Подгоняем «манекен» редактируемого номера, сохраняя поля и фокус ввода; игровое колесо возьмёт диаметр при открытии.
     });
     if (appearanceEditor.needsSave) settingsChanged = true; // Сохраняем индивидуальные комплекты, впервые созданные из прежнего общего вида.
 
@@ -85,7 +92,7 @@ exports.create = function(api) {
     }
 
     function getIconScale(wheelNumber, sectorNumber) {
-        if (!validIndex(wheelNumber, wheelCount) || !validIndex(sectorNumber, wheelView.getVisual(wheelNumber).sectorCount)) return 1; // Проверяем сектор по комплекту именно этого номера.
+        if (!validIndex(wheelNumber, wheelCount) || !validIndex(sectorNumber, 128)) return 1; // Скрытые своим визуалом слоты тоже сохраняют масштаб: закреплённый игровой визуал может показывать больше секторов.
         return iconScales[wheelNumber][sectorNumber] || 1; // Ещё не настроенный сектор использует масштаб 100%, в том числе после будущего увеличения числа секторов.
     }
 
@@ -95,7 +102,13 @@ exports.create = function(api) {
     // Core.settings хранит имена блоков.
     for (var w = 0; w < wheelCount; w++) {
         iconScales[w] = []; // Каждому колесу создаём свой массив 'масштабов иконок'.
-        for (var s = 0; s < wheelView.getVisual(w).sectorCount; s++) { // Количество слотов загружаем из того же комплекта, который используется для рисования этого номера.
+        var loadedSlotCount = wheelView.getVisual(w).sectorCount; // Видимый визуал задаёт минимальное количество загружаемых слотов.
+        try { // Более короткий применённый визуал не должен скрыто терять блоки после перезапуска игры.
+            var storedSlotCount = Number(Core.settings.getInt(settingsPrefix + w + ".count", loadedSlotCount)); // Дополнительная длина хранится вместе с блоками, отдельно от числа видимых секторов.
+            if (storedSlotCount >= 1 && storedSlotCount <= 128) loadedSlotCount = Math.max(loadedSlotCount, storedSlotCount); // Загружаем и ранее сохранённый скрытый хвост массива.
+        } catch (error) { // При неверном типе длины используем число секторов текущего визуала.
+        }
+        for (var s = 0; s < loadedSlotCount; s++) { // Восстанавливаем видимые и скрытые блоки с их собственными масштабами.
             var key = slotKey(w, s); // генерирует персональные текстовые адреса каждому сектору
             var savedName = String(Core.settings.getString(key + ".block", "")); //проверяем сохранененные адреса и при наличии вытягиваем те блоки из Core.settings
             if (savedName.length > 0) {// Если мод с блоком удалён, content.block вернёт null: слот пуст.
@@ -104,6 +117,81 @@ exports.create = function(api) {
             var scale = Number(Core.settings.getFloat(key + ".scale", 1)); // Читаем параметр размера в Java Float как число JS; при отсутствии настройки берём 1.
             iconScales[w][s] = isFinite(scale) ? Math.max(0.4, Math.min(2, scale)) : 1; // Ограничиваем 40–200%; для NaN/бесконечности используем 100%.
         }
+    }
+
+    // СНИМКИ ДАННЫХ И БРАУЗЕР СОХРАНЕНИЙ
+    var snapshots = snapshotsModule.create({ // Адаптер отделяет сохранения от живых массивов блоков и объектов Color.
+        wheelView: wheelView, appearanceEditor: appearanceEditor, getBlock: api.getBlock, setBlock: api.setBlock, // Передаём существующие методы доступа к параметрам.
+        getScale: getIconScale, setScale: function(w, s, value) { iconScales[w][s] = value; }, // Размер иконки является частью сохранённого слота блока.
+        getSlotCount: function(w) { return Math.max(iconScales[w].length, wheelView.getVisual(w).sectorCount); } // Учитываем скрытые слоты при сохранении и последующем очищении лишних мест.
+    });
+    saves = browserModule.create({ // Создаём только окно браузера; карточки будут построены при его открытии.
+        store: libraryModule.create(), addTooltip: addTooltip, topDialog: topDialog, getWheelNumber: () => editedWheel, // Четыре постоянные вкладки получают единое хранилище.
+        capture: type => snapshots.capture(type, editedWheel), // Сохранение берёт собственные данные выбранного номера, не закреплённый игровой образец.
+        apply: function(entry, number) { // Вызывается только после штатного подтверждения пользователем.
+            if (!snapshots.valid(entry.type, entry.data)) { Vars.ui.showInfo("Сохранение содержит неверные данные."); return; } // Повреждённый набор не должен применяться частично.
+            editedSector = -1; applyingSavedData = true; // Прежнее выделение сбрасываем; промежуточные диаметры не перестраивают меню.
+            try { snapshots.apply(entry.type, entry.data, number); } finally { applyingSavedData = false; } // Все данные проверены до изменения первого номера.
+            settingsChanged = true; // Изменены действующие настройки, а не запись в библиотеке.
+            appearanceEditor.selectWheel(editedWheel); resizePreview(); refreshSectorControls(); // Показываем результат в прежних виджетах меню.
+            flushSettings(); // Подтверждённое применение сразу записываем на диск.
+        },
+        onClosed: function() { Core.app.post(focusBlockList); } // Возврат из браузера восстанавливает прокрутку актуального списка блоков.
+    });
+
+    // ВЕРХНЕЕ ОКНО И ПЕРЕКЛЮЧАТЕЛЬ ОБЩЕГО ИГРОВОГО ВИЗУАЛА
+    function topDialog() { // Проверяем окна только при действии пользователя, без покадрового обхода сцены.
+        var children = Core.scene.root.getChildren(); // Диалоги игры и модов находятся в корневой группе сцены.
+        for (var i = children.size - 1; i >= 0; i--) { // Последний показанный диалог располагается поверх предыдущих.
+            var child = children.get(i); // Берём очередного ребёнка корневой группы.
+            if (child instanceof Dialog && child.isShown()) return child; // Ввод имени и подтверждения должны получать Escape раньше родительского меню.
+        }
+        return null; // Сейчас открытых диалогов нет.
+    }
+
+    function refreshLock() { // Обновляем значок и текст только при смене номера, режима либо сборке меню.
+        if (lockButton == null) return; // До создания панели обновлять нечего.
+        var pinned = wheelView.getSharedVisualNumber(); // -1 означает независимые визуалы; остальные значения обозначают закреплённый номер.
+        lockButton.getStyle().imageUp = pinned < 0 ? Icon.lockOpen : Icon.lock; // Стиль принадлежит этой кнопке, поэтому остальные иконки игры не меняются.
+        var number = "[#FFD37F]" + (pinned < 0 ? editedWheel : pinned) + "[]"; // Только номер окрашиваем жёлтым HEX, оставляя описание серым.
+        lockLabel.setText(pinned < 0 ? "Использовать визуал колеса № " + number + " везде" : "Визуал колеса № " + number + " используется везде"); // Подсказка отражает действие открытого замка либо источник общего вида.
+        lockLabel.setWrap(false); // Измеряем полный новый текст независимо от переноса в предыдущем состоянии замка.
+        var container = lockLabel.parent, available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Учитываем фактическую ширину экрана и отступы штатной подсказки.
+        var width = lockLabel.getPrefWidth(); // Размер описания пересчитывается только при обновлении замка.
+        container.getCells().first().width(Math.min(width, available)); // Длинная изменяемая подсказка не становится шире экрана.
+        lockLabel.setWrap(width > available); // Переносим только тот текст, которому не хватает места.
+    }
+
+    function createWheelTools() { // Вертикальная панель располагается слева от области «манекена» и заканчивается над «Основным кругом».
+        var tools = new Table(); // Панель не добавляет колонку в таблицу самого «манекена».
+        lockButton = tools.button(Icon.lock, Styles.cleari, () => { // Иконка будет уточнена по сохранённому режиму ниже.
+            wheelView.setSharedVisual(wheelView.getSharedVisualNumber() < 0 ? editedWheel : -1); // Закрепляем выбранный номер либо возвращаем каждому номеру собственный вид.
+            settingsChanged = true; refreshLock(); // Параметры остальных девяти комплектов остаются нетронутыми.
+        }).size(toolsSize).name("buildwheel-visual-lock").get(); // Квадратная кнопка замка стоит первой.
+        lockButton.resizeImage(24); // Сохраняем пространство вокруг значка.
+        addTooltip(lockButton, ""); // Получаем штатный полупрозрачный фон и серый текст для изменяемого описания.
+        lockLabel = lockButton.getListeners().peek().getContainer().getCells().first().get(); // Меняем текст существующей подсказки, не создавая слушатель при каждом переключении.
+        refreshLock(); tools.row(); // Устанавливаем сохранённую иконку и начинаем следующий ряд.
+        var actions = [ // Порядок кнопок соответствует четырём типам снимков и открытию браузера.
+            {icon: Icon.fileImage, type: "visual", text: "Сохранить визуал этого колеса"},
+            {icon: Icon.fileCode, type: "blocks", text: "Сохранить блоки этого колеса"},
+            {icon: Icon.fileArchive, type: "wheel", text: "Сохранить и визуал, и блоки этого колеса"},
+            {icon: Icon.layers, type: "wheels", text: "Сохранить данный набор колёс"},
+            {icon: Icon.bookOpen, type: "browser", text: "Сохранения"}
+        ];
+        for (var i = 0; i < actions.length; i++) { // Создаём только пять кнопок текущей панели.
+            addWheelTool(tools, actions[i], i == 0 ? 10 : 2); // После замка оставляем зазор больше, чем между остальными кнопками.
+            tools.row(); // Следующее действие располагается строго ниже.
+        }
+        return tools; // Таблица размещается поверх свободной левой области строки «манекена».
+    }
+
+    function addWheelTool(tools, action, gap) { // Отдельный вызов сохраняет своё действие для каждого обработчика кнопки.
+        var button = tools.button(action.icon, Styles.cleari, () => { // Используем те же штатные квадратные кнопки, что у замка.
+            if (action.type == "browser") saves.show(); // Книга открывает список существующих записей.
+            else saves.save(action.type); // Остальные кнопки вызывают штатную плашку ввода имени.
+        }).size(toolsSize).padTop(gap).name("buildwheel-save-" + action.type).get(); // Служебное имя совпадает с типом действия.
+        button.resizeImage(24); addTooltip(button, action.text); // Значок и подсказка не перекрывают соседнюю кнопку.
     }
 
     // Сохраняет блок и масштаб редактируемого сектора.
@@ -370,16 +458,17 @@ exports.create = function(api) {
         clearSlotButton.setSize(crossSize, crossSize); // Задаём тот же размер кнопке удаления блока из сектора.
         clearSelectionButton.setPosition(previewSize - crossSize, previewSize - crossSize); // Ставим кнопку снятия выделения в правый верхний угол.
         clearSlotButton.setPosition(0, previewSize - crossSize); // Ставим кнопку удаления блока в левый верхний угол.
-        var rightWidth = Math.max(baseRightWidth, uiSize + 36); // Выделяем ширину для «манекена», бокового слайдера и полей настроек.
+        var rightWidth = Math.max(baseRightWidth, uiSize + 36 + toolsReserve * 2); // Выделяем ширину для «манекена», бокового слайдера и полей настроек.
         sectorLabelCell.width(rightWidth); // Подгоняем ширину строки с названием выбранного сектора и блока.
         rightPanelCell.width(rightWidth); // Меняем ширину всей правой панели в основной таблице меню.
+        previewRowCell.width(rightWidth).height(Math.max(uiSize, toolsHeight)); // Панель действий помещается по высоте, а «манекен» остаётся у прежнего верхнего края своей строки.
         previewEditor.invalidateHierarchy(); // Помечаем таблицу «манекена» и её родителей для пересчёта раскладки.
     }
 
     // Указывает сцене, какой ScrollPane должен получать вращение колёсика.
     // Проверка isShown не даёт отложенной задаче забрать фокус после закрытия меню.
     function focusBlockList() {
-        if (dialog.isShown() && !palette.isShown()) Core.scene.setScrollFocus(blockPane); // Открытая палитра сохраняет прокрутку за своим рисунком.
+        if (dialog.isShown() && !palette.isShown() && (saves == null || !saves.isShown())) Core.scene.setScrollFocus(blockPane); // Открытая палитра сохраняет прокрутку за своим рисунком.
     }
 
     // ------------------------------------------------------------
@@ -397,7 +486,7 @@ exports.create = function(api) {
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
         var appearanceWidth = Math.max(240, Math.min(contentWidth * 0.45 + 40, 600)); // Выбираем ширину формы по экрану (запас 40 распределяется между полями размера и HEX).
         baseRightWidth = Math.max(contentWidth * 0.45, appearanceWidth); // Задаём минимальную ширину правой панели по экрану и форме настроек.
-        var rightWidth = Math.max(baseRightWidth, previewUiSize + 36); // Выделяем место для «манекена» и 36 UI-единиц под боковой слайдер с отступом.
+        var rightWidth = Math.max(baseRightWidth, previewUiSize + 36 + toolsReserve * 2); // Выделяем место для «манекена» и 36 UI-единиц под боковой слайдер с отступом.
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
@@ -485,6 +574,7 @@ exports.create = function(api) {
             wheelLabel.setText("Колесо " + editedWheel);
             appearanceEditor.selectWheel(editedWheel); // Переключаем значения полей, подчёркивания и слайдеры на независимый визуал этого номера.
             resizePreview(); // Подгоняем тот же виджет «манекена» и угловые кнопки под диаметр другого комплекта.
+            refreshLock(); // Открытый замок предлагает закрепить новый выбранный номер; закрытый продолжает показывать прежний источник.
             refreshSectorControls(); //обновляем видимые настройки сектора
         });
         var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
@@ -515,7 +605,13 @@ exports.create = function(api) {
         });
         scaleSliderCell = editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8); // Добавляем боковой слайдер высотой с «манекен» и сохраняем его ячейку.
         previewCell = editor.add(createPreview()).size(previewUiSize); // Создаём «манекен» и сохраняем его ячейку (Cell применяет масштаб UI к указанному размеру).
-        right.add(editor).top();
+        var previewRow = new Stack(); // Слои позволяют добавить действия в свободную область без колонки, сдвигающей «манекен».
+        var centeredPreview = new Table(); // Основной слой сохраняет прежнее центрирование круга и слайдера иконки.
+        centeredPreview.top(); centeredPreview.add(editor).top(); // При увеличении высоты строки «манекен» остаётся у прежнего верхнего края.
+        var toolsLayer = new Table(); // Второй слой содержит только вертикальную панель действий слева.
+        toolsLayer.left().bottom(); toolsLayer.add(createWheelTools()).left().bottom(); // Нижняя кнопка располагается непосредственно над группой «Основной круг».
+        previewRow.add(centeredPreview); previewRow.add(toolsLayer); // Прозрачные таблицы не закрывают находящиеся под ними кнопки и слайдеры.
+        previewRowCell = right.add(previewRow).width(rightWidth).height(Math.max(previewUiSize, toolsHeight)).top(); // Учитываем панель по высоте, не меняя положение самого «манекена» внутри строки.
         right.row(); // Следующий ряд правой панели отводим настройкам внешнего вида.
         right.add(appearanceEditor.build(appearanceWidth, editedWheel)).width(appearanceWidth).left().padTop(12); // Строим форму для выбранного номера под «манекеном» с верхним отступом.
         rightPanelCell = body.add(right).width(rightWidth).padLeft(12).top(); // Добавляем правую панель в меню и сохраняем её ячейку для изменения ширины.
@@ -533,6 +629,7 @@ exports.create = function(api) {
     // ОТКРЫТИЕ, ЗАКРЫТИЕ И ПЕРЕСТРОЙКА ПО РАЗМЕРУ ОКНА
     // ------------------------------------------------------------
     function hide() { //Закрыть меню настроек
+        saves.hide(); // Не оставляем браузер или его дочернее окно над закрытым меню.
         palette.hide(); // При закрытии всего редактора палитра тоже должна исчезнуть.
         if (dialog.isShown()) dialog.hide();
     }
@@ -555,6 +652,7 @@ exports.create = function(api) {
     // При начале закрытия снимаем выделение и сохраняем изменённые настройки.
     // Сама анимация исчезновения диалога при этом ещё может продолжаться.
     dialog.hidden(() => {
+        saves.hide(); // Внешнее закрытие родительского окна также закрывает библиотеку и её плашки.
         palette.hide(); // Закрываем дочернее окно также при внешнем вызове dialog.hide().
         editedSector = -1;
         flushSettings();
@@ -594,6 +692,12 @@ exports.create = function(api) {
     function handleKeyDown(key) {
         if (dialog.isShown()) {
             if (isCloseKey(key)) {
+                if (saves.isShown()) { // Сначала закрываем браузер, оставляя «Радиальное меню» открытым.
+                    if (!saves.closeFromKey()) return false; // Штатный ввод имени, редактор и подтверждение получают Escape самостоятельно.
+                    closeKeysCaptured[key.ordinal()] = true; // Поглощаем и отпускание собственной клавиши закрытия браузера.
+                    return true; // Родительское окно этим нажатием не закрывается.
+                }
+                if (!palette.isShown() && topDialog() !== dialog) return false; // Не забираем Escape у штатной плашки сохранения, открытой кнопкой панели.
                 closeKeysCaptured[key.ordinal()] = true; // Запоминаем перехваченную клавишу, чтобы позже поглотить её отпускание.
                 Core.app.post(palette.isShown() ? palette.hide : hide); // Сначала закрываем палитру; следующее нажатие закроет основное меню настроек.
                 return true;

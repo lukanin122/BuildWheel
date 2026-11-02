@@ -71,19 +71,19 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
     // ОДНОКРАТНАЯ ЗАГРУЗКА И ПЕРЕНОС ПРЕЖНЕГО ОБЩЕГО ВИДА
     for (var number = 0; number < wheelView.wheelCount; number++) { // Все десять небольших комплектов читаются только при создании редактора, а не при открытии колёс.
         var visual = wheelView.getVisual(number), savedAppearance = visual.appearance; // Заполняем существующие объекты: ссылки рисования на них сохраняются.
-        for (var i = 0; i < fields.length; i++) { // Восстанавливаем параметры шести групп, доступных пользователю справа от списка блоков.
+        for (var i = 0; i < fields.length; i++) { // Читаем настройки до создания «манекена».
             var field = fields[i], key = fieldKey(number, field); // Получаем отдельный ключ параметра этого номера.
             var hasIndividual = Core.settings.has(key); // Индивидуальный параметр всегда имеет приоритет перед старым общим.
             var sourceKey = hasIndividual ? key : legacyPrefix + field.key; // При первом переходе переносим прежний визуал на каждый номер.
-            try { // Повреждённое значение не должно мешать загрузке остальных настроек.
-                if (field.type == "color") { // Цвета сохраняются строками #RRGGBB.
+            try { // Обрабатываем неверный тип сохранённого значения без срыва открытия меню.
+                if (field.type == "color") { // Цвета хранятся как строки HEX.
                     var savedColor = String(Core.settings.getString(sourceKey, colorText(savedAppearance[field.key]))); // При отсутствии старого значения оставляем заводской цвет.
                     if (validColor(savedColor)) savedAppearance[field.key].set(Color.valueOf(savedColor)); // Меняем собственный Color этого номера, не затрагивая другие комплекты.
                 } else {
                     var savedNumber = Number(Core.settings.getFloat(sourceKey, savedAppearance[field.key])); // Читаем число с заводским значением по умолчанию.
                     if (validNumber(field, savedNumber)) savedAppearance[field.key] = savedNumber; // Применяем только число в прежних допустимых пределах.
                 }
-            } catch (error) { // Ошибка типа сохранённого значения оставляет заводской параметр в этом комплекте.
+            } catch (error) { // При ошибке чтения сохраняем исходное значение appearance.
             }
             if (!hasIndividual) { // Материализуем перенос один раз; дальнейшие изменения старых общих ключей на этот номер уже не влияют.
                 saveField(field, number); // Сохраняем полученное значение в памяти Core.settings по новому адресу.
@@ -277,6 +277,41 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         for (var i = 0; i < synchronizeGroups.length; i++) synchronizeGroups[i](); // Показываем новый комплект в тех же полях и стилях формы.
     }
 
+    // НЕЗАВИСИМЫЙ СНИМОК ВИЗУАЛА И ПРИМЕНЕНИЕ СОХРАНЕНИЯ
+    function capture(number) { // Преобразуем параметры колеса в обычные данные для библиотеки, без ссылок на Java Color.
+        var visual = wheelView.getVisual(number), data = {}; // Читаем собственный комплект указанного номера.
+        for (var i = 0; i < fields.length; i++) { // Сохраняем все параметры шести пользовательских групп.
+            var field = fields[i], value = visual.appearance[field.key]; // Получаем текущее значение параметра.
+            data[field.key] = field.type == "color" ? colorText(value) : Number(value); // Цвет записываем как HEX, числа оставляем числами JSON.
+        }
+        return {appearance: data, sectorCount: visual.sectorCount}; // Количество секторов остаётся частью того же визуала.
+    }
+
+    function validSnapshot(data) { // Полная проверка выполняется до замены хотя бы одного действующего параметра.
+        if (data == null || data.appearance == null || typeof data.sectorCount != "number" || !validNumber({min: 1, max: 128, integer: true}, data.sectorCount)) return false; // Отсеиваем неполный визуал и неверное число секторов.
+        for (var i = 0; i < fields.length; i++) { // Требуем весь набор параметров, а не частичное повреждённое сохранение.
+            var field = fields[i], value = data.appearance[field.key]; // Читаем параметр без изменения рабочего appearance.
+            if (field.type == "color" ? typeof value != "string" || !validColor(value) : typeof value != "number" || !validNumber(field, value)) return false; // Используем те же ограничения, что у полей настроек.
+        }
+        return true; // Все параметры можно применить одним комплектом.
+    }
+
+    function applySnapshot(number, data) { // Вызывается браузером после подтверждения и общей проверки сохранения.
+        if (!validSnapshot(data)) return false; // Неверные данные не должны частично менять колесо.
+        var visual = wheelView.getVisual(number); // Меняем существующий комплект, сохраняя ссылки рисования и подчёркиваний.
+        for (var i = 0; i < fields.length; i++) { // Восстанавливаем параметры ровно одного номера.
+            var field = fields[i], value = data.appearance[field.key]; // Берём проверенное значение сохранения.
+            if (field.type == "color") visual.appearance[field.key].set(Color.valueOf(value)); // Сохраняем сам объект Color этого номера.
+            else visual.appearance[field.key] = value; // Числа заменяем непосредственно в appearance.
+            saveField(field, number); // Обновляем индивидуальные ключи активных настроек.
+        }
+        visual.sectorCount = data.sectorCount; // Применяем геометрию из того же визуала.
+        Core.settings.put(settingsPrefix + number + ".sectorCount", new java.lang.Integer(String(data.sectorCount))); // Сохраняем число секторов как Java Integer.
+        if (number == editedWheel) selectWheel(number); // Открытая форма сразу показывает восстановленные значения.
+        onChanged(true); // Меню отмечает изменения и подгоняет «манекен» под актуальный диаметр.
+        return true; // Сообщаем об успешном применении без пересоздания самого колеса.
+    }
+
     // РАСЧЁТ ШИРИН И СБОРКА ВСЕЙ ФОРМЫ
     function build(width, number) { // Вызывается меню при построении интерфейса; width задана в UI-единицах, number задаёт редактируемое колесо.
         synchronizeGroups = []; // Освобождаем ссылки на поля прежней сборки при открытии меню или изменении разрешения.
@@ -298,5 +333,5 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         return table; // Передаём меню форму для размещения под «манекеном».
     }
 
-    return {build: build, selectWheel: selectWheel, needsSave: needsSave}; // Меню переключает данные готовой формы и учитывает однократный перенос настроек при сохранении.
+    return {build: build, selectWheel: selectWheel, needsSave: needsSave, capture: capture, validSnapshot: validSnapshot, applySnapshot: applySnapshot}; // Меню переключает данные готовой формы и учитывает однократный перенос настроек при сохранении.
 };
