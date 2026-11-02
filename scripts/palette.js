@@ -321,6 +321,20 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         return true; // Полный цвет можно разбирать и применять.
     }
 
+    // ОПИСАНИЯ НАСТРОЕК КАК В ГРАФИЧЕСКОМ МЕНЮ MINDUSTRY
+    function addTooltip(cell, text) { // Сохраняем удобное добавление описания к ячейке, используя родной метод игры.
+        var element = cell.get(); // Получаем кнопку, поле или надпись, над которой наводят мышь.
+        Vars.ui.addDescTooltip(element, text); // Родной Tooltip задаёт полупрозрачный фон, серый текст и положение под левым краем элемента.
+        var container = element.getListeners().peek().getContainer(); // Получаем созданную игрой таблицу подсказки.
+        var textCell = container.getCells().first(), label = textCell.get(); // Работаем только с описанием настройки; плашка «Скопировано» не затрагивается.
+        var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Ограничиваем ширину размером экрана.
+        if (label.getPrefWidth() > available) { // Длинному описанию выделяем ширину в пределах экрана.
+            textCell.width(available); label.setWrap(true); // Включаем перенос у самой надписи, не уменьшая шрифт.
+        }
+        container.update(() => container.keepInStage()); // У края экрана подсказка сдвигается внутрь, сохраняя обычную привязку в остальных случаях.
+        return cell; // Позволяем продолжить цепочку настройки размеров или получения элемента.
+    }
+
     function colorHex(color) { // Общая запись цвета для результатов HSV и тонирования.
         var rgb = (Math.round(color.r * 255) << 16) | (Math.round(color.g * 255) << 8) | Math.round(color.b * 255); // Округляем каждый канал до ближайшего байта RGB.
         return (0x1000000 | rgb).toString(16).substring(1).toUpperCase(); // Получаем ровно шесть цифр с ведущими нулями, без #.
@@ -400,18 +414,19 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
 
     function createHsvRow(index) { // Общий шаблон строки H, S или V с одинаковой длиной слайдера.
         var axis = hsvAxes[index], row = new Table(); // Берём параметры оси и создаём отдельную строку.
-        row.add(axis.label).width(18).tooltip(axis.title); // Показываем букву и её русское значение при наведении.
+        addTooltip(row.add(axis.label).width(18), axis.title); // Показываем русское значение буквы под её левым краем.
         axis.slider = new Slider(0, axis.max, axis.step, false, createGradientStyle(axis, () => hsvKnobColor)); // Сохраняем нативное перетаскивание, используя общее оформление цветных слайдеров.
         axis.slider.name = "buildwheel-hsv-" + axis.key; // Постоянное имя нужного параметра для поиска в сцене.
         axis.slider.setRound(false); // Совмещаем рисунок и мышь без дополнительного округления дробных координат UI.
         axis.slider.setValue(hsvValues[index], false); // Показываем текущее значение без повторного расчёта результата.
         axis.slider.moved(value => { hsvValues[index] = Number(value); refreshHsvOutput(index); }); // Меняем только выбранный параметр; соседние бегунки остаются на месте.
         row.add(axis.slider).growX().minWidth(0).height(44).padLeft(4).padRight(4); // Выделяем всей полосе удобную область нажатия высотой 44.
-        row.button(Icon.refresh, Styles.cleari, () => { // Возвращаем только этот параметр к исходному значению последнего правильного HEX.
+        var reset = row.button(Icon.refresh, Styles.cleari, () => { // Возвращаем только этот параметр к исходному значению последнего правильного HEX.
             hsvValues[index] = Number(hsvDefaults[index]); // Точный исходный HSV хранится независимо от текущего результата.
             axis.slider.setValue(hsvValues[index], false); // Переставляем нужный бегунок, не затрагивая остальные.
             refreshHsvOutput(index); // Обновляем результат, образец и зависимые переходы.
-        }).size(32, 44).name("buildwheel-hsv-reset-" + axis.key).tooltip("Сбросить " + axis.label).get().resizeImage(20); // Кнопки refresh одинаковы по размеру и поясняют свой сброс.
+        }).size(32, 44).name("buildwheel-hsv-reset-" + axis.key); // Кнопки refresh одинаковы по размеру.
+        addTooltip(reset, "Сбросить " + axis.label).get().resizeImage(20); // Описание сброса использует серый текст и штатный полупрозрачный фон.
         return row; // Возвращаем готовую строку редактору HSV.
     }
 
@@ -491,13 +506,13 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         tintPercentLabel.setAlignment(Align.left); // Сохраняем положение начала текста при изменении числа процентов.
         widthCells.push(editor.add().width(columnWidth)); // Пустая третья ячейка тоже сохраняет общую ширину колонок.
         editor.row(); // Верхняя строка содержит три HEX-кода.
-        widthCells.push(editor.add(createTintField(0)).width(columnWidth).height(44).padRight(8).tooltip("Базовый цвет")); // Слева вводим цвет, который соответствует 0%.
+        widthCells.push(addTooltip(editor.add(createTintField(0)).width(columnWidth).height(44).padRight(8), "Базовый цвет")); // Под исходным полем показываем серое описание его назначения.
         var output = createHexButton("buildwheel-tint-output-button", "buildwheel-tint-output", () => true, // Центральная кнопка использует ту же рамку и отступы, что результат HSV.
             (source, x, y) => copyHex(tintOutput.hex, source, x, y)); // Копируем результат с прежней плашкой, не меняя выбранный гексагон и редактор HSV.
         tintOutputLabel = output.label; // Сохраняем ссылку на надпись результата для обновления при перетаскивании.
         tintOutputLabel.setText("#" + tintOutput.hex); tintOutputLabel.setColor(tintOutput.color); // Восстанавливаем результат при перестройке окна.
         widthCells.push(editor.add(output.button).width(columnWidth).height(44).padRight(8)); // Центральная кнопка результата меняет ширину вместе с полями.
-        widthCells.push(editor.add(createTintField(1)).width(columnWidth).height(44).tooltip("Целевой цвет")); // Справа вводим цвет, который соответствует 100%.
+        widthCells.push(addTooltip(editor.add(createTintField(1)).width(columnWidth).height(44), "Целевой цвет")); // Под целевым полем показываем серое описание его назначения.
         editor.row(); // Следом располагаем три одинаковых прямоугольника под соответствующими HEX.
         widthCells.push(editor.add(createColorSwatch(tintInputs[0].color, "buildwheel-tint-base-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Левый образец сохраняет ширину своего поля.
         widthCells.push(editor.add(createColorSwatch(tintOutput.color, "buildwheel-tint-output-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Центральный образец сохраняет ширину кнопки результата.
@@ -657,7 +672,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             onChanged(); // Просим основное меню сохранить настройки на диск при закрытии.
             rebuildGeometry(); // Один раз обновляем координаты и готовые подписи.
         });
-        table.add(field).growX().height(44).padBottom(16).tooltip(min + "–" + max + " пикселей"); // Задаём высоту, отступ до следующей настройки и подсказку диапазона.
+        addTooltip(table.add(field).growX().height(44).padBottom(16), min + "–" + max + " пикселей"); // Диапазон показываем серым текстом под началом числового поля.
         table.row(); // Следующая настройка начинается с нового ряда.
     }
 

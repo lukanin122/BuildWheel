@@ -95,7 +95,14 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
     }
 
     function addTooltip(element, text) { // Добавляем элементу всплывающую подсказку.
-        element.addListener(new Tooltip(table => table.add(text))); // Tooltip показывает переданный текст при наведении мыши.
+        Vars.ui.addDescTooltip(element, text); // Штатная подсказка настроек Mindustry: полупрозрачный фон, серый текст, начало под левым краем элемента.
+        var container = element.getListeners().peek().getContainer(); // Метод игры добавляет свой Tooltip последним слушателем элемента.
+        var cell = container.getCells().first(), label = cell.get(); // Получаем штатную надпись, сохраняя её оформление.
+        var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Не разрешаем длинному описанию стать шире экрана.
+        if (label.getPrefWidth() > available) { // Ограничиваем только те описания, которым действительно не хватает места.
+            cell.width(available); label.setWrap(true); // Задаём ширину и включаем перенос непосредственно у Label, сохраняя размер шрифта.
+        }
+        container.update(() => container.keepInStage()); // Только показанная подсказка сдвигается у края экрана; обычная остаётся под началом элемента.
     }
 
     // СОЗДАНИЕ ПОЛЯ С ПОДПИСЬЮ

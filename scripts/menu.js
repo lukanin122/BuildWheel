@@ -50,6 +50,19 @@ exports.create = function(api) {
         if (dialog.isShown()) Core.scene.setScrollFocus(blockPane); // При возврате из палитры передаём колёсико мыши актуальному списку блоков.
     });
 
+    // ШТАТНЫЕ ПОДСКАЗКИ НАСТРОЕК И ПРИВЯЗКА К ЛЕВОМУ КРАЮ ЭЛЕМЕНТА
+    function addTooltip(element, text, keepWhite) { // Оформление берём из игры, а для левого списка сохраняем прежний белый текст.
+        Vars.ui.addDescTooltip(element, text); // Родной метод уже показывает описание под началом элемента на полупрозрачном фоне.
+        var container = element.getListeners().peek().getContainer(); // Получаем только что созданную игрой подсказку.
+        var cell = container.getCells().first(), label = cell.get(); // Штатное описание содержит одну надпись в таблице.
+        if (keepWhite) label.setColor(Color.white); // Блоки, кампании и категории сохраняют прежнее оформление обычных игровых подсказок.
+        var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Ограничиваем ширину описания размером экрана.
+        if (label.getPrefWidth() > available) { // Длинное название не должно выходить за экран целиком.
+            cell.width(available); label.setWrap(true); // Переносим текст самого Label без изменения его цвета или размера.
+        }
+        container.update(() => container.keepInStage()); // При нехватке места сдвигаем показанную подсказку внутрь экрана.
+    }
+
     // СВЯЗЬ НАСТРОЕК ВИДА С МЕНЮ
     var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
         settingsChanged = true; // Отмечаем, что настройки потребуется записать на диск при закрытии меню.
@@ -158,7 +171,7 @@ exports.create = function(api) {
     function addBlockButton(block) {
         var cell = grid.button(new TextureRegionDrawable(block.uiIcon), Styles.selecti, () => assignBlock(block)); // button возвращает ячейку таблицы; обработчик нажатия запоминает именно этот block.
         cell.size(48).pad(2).name("buildwheel-block-" + block.name); // Размер кнопки и отступы; name — техническое имя для поиска элемента в сцене.
-        cell.tooltip(String(block.localizedName) + "\n" + block.name); // Подсказка показывает название игроку и внутреннее имя блока.
+        addTooltip(cell.get(), String(block.localizedName) + "\n" + block.name, true); // Сохраняем оформление названия блока и привязываем подсказку под его иконкой.
         var button = cell.get(); // Из ячейки Cell получаем сам Java-объект кнопки.
         button.resizeImage(32); // Размер картинки внутри кнопки; сама кнопка остаётся размером 48.
         button.setProgrammaticChangeEvents(false); // Изменения состояния кнопки из кода не порождают ChangeEvent.
@@ -229,7 +242,7 @@ exports.create = function(api) {
         var campaign = {planet: planet, enabled: Core.settings.getBool(campaignKey(planet), true), button: null};
         var cell = table.button(Icon.planet, Styles.squareTogglei, () => toggleCampaign(campaign));
         cell.size(size).name("buildwheel-campaign-" + planet.name);
-        cell.tooltip(String(planet.localizedName));
+        addTooltip(cell.get(), String(planet.localizedName), true); // Название кампании сохраняет белый цвет и появляется под началом кнопки.
         var button = cell.get();
         button.resizeImage(20); // На одну UI-единицу меньше иконок категорий.
         button.getImageCell().pad(1.5);
@@ -260,7 +273,7 @@ exports.create = function(api) {
         var cell = table.button(categoryIcon, Styles.squareTogglei,
             () => chooseCategory(nextCategory)); //запоминаем какую категорию активируем кнопкой
         cell.size(size).name("buildwheel-category-" + categoryName); // Кнопки соприкасаются рамками, без внешних отступов.
-        cell.tooltip(allCategories ? "Всё" : Core.bundle.get("blocks." + categoryName, categoryName));
+        addTooltip(cell.get(), allCategories ? "Всё" : Core.bundle.get("blocks." + categoryName, categoryName), true); // Категории сохраняют прежний вид подсказки с привязкой к началу иконки.
         var button = cell.get();
         //button.resizeImage(Math.min(24, size - 3)); // либо 24 (великовато), либо 21 (в самый раз)
         button.resizeImage(21);
@@ -329,7 +342,7 @@ exports.create = function(api) {
             uiSounds.play(uiSounds.deleteBlock);//проигрываем звук удаления блока
         });
         uiSounds.muteDefaultClick(clearSelectionButton);
-        clearSelectionButton.addListener(new Tooltip(table => table.add("Снять выделение сектора")));
+        addTooltip(clearSelectionButton, "Снять выделение сектора"); // Показываем штатное серое описание под началом кнопки.
         group.addChild(clearSelectionButton);
 
         clearSlotButton = new ImageButton(createClearSlotIcon(), Styles.cleari);
@@ -338,7 +351,7 @@ exports.create = function(api) {
         clearSlotButton.setPosition(0, previewSize - crossSize); // Освободившийся верхний левый угол 'Сброс блока'.
         clearSlotButton.clicked(() => assignBlock(null)); // Очищаем и сохраняем слот; зелёное выделение и масштаб остаются.
         uiSounds.muteDefaultClick(clearSlotButton);
-        clearSlotButton.addListener(new Tooltip(table => table.add("Удалить блок из сектора")));
+        addTooltip(clearSlotButton, "Удалить блок из сектора"); // Показываем штатное серое описание под началом кнопки.
         group.addChild(clearSlotButton);
         return group;
     }
@@ -476,7 +489,7 @@ exports.create = function(api) {
         var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
         wheelNumberRow.add(wheelSlider).growX().height(32); // Слайдер занимает всю ширину строки до кнопки справа.
         wheelNumberRow.button("Палитра", Core.atlas.drawable("buildwheel-icon_color"), 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
-            .width(144).height(44).name("buildwheel-open-palette").tooltip("Палитра"); // Закрепляем кнопку у правого края и добавляем подсказку.
+            .width(144).height(44).name("buildwheel-open-palette"); // Закрепляем кнопку у правого края без всплывающей подсказки.
         right.add(wheelNumberRow).growX().padTop(8).padBottom(8); // Отступ сверху сохраняет место под высокий стандартный бегунок слайдера.
         right.row();
 
