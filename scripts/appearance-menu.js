@@ -105,8 +105,29 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         container.update(() => container.keepInStage()); // Только показанная подсказка сдвигается у края экрана; обычная остаётся под началом элемента.
     }
 
+    // ОКРАСКА ПОДЧЁРКИВАНИЙ И СЛАЙДЕРОВ ГРУППЫ
+    function coloredUnderline(drawable, color) { // Оборачиваем штатное подчёркивание, сохраняя его рисунок, размеры и отступы.
+        if (drawable == null) return null; // Не создаём фон для состояния, у которого его изначально нет.
+        return extend(BaseDrawable, drawable, { // Конструктор BaseDrawable копирует размеры исходного Drawable для правильного размещения текста.
+            draw: function(x, y, width, height) { // Игра вызывает отрисовку подчёркивания в обычных границах поля.
+                var previous = Draw.getColor(); // Читаем цвет, с которым TextField собирался рисовать свой фон.
+                var r = previous.r, g = previous.g, b = previous.b, a = previous.a; // Сохраняем компоненты отдельно: Draw.color изменяет тот же объект Color.
+                Draw.color(r * color.r, g * color.g, b * color.b, a); // Окрашиваем подчёркивание цветом группы, сохраняя прозрачность интерфейса.
+                try { // Возвращаем цвет рисования даже при ошибке внутри штатного Drawable.
+                    drawable.draw(x, y, width, height); // Рисуем прежнее подчёркивание; новые текстуры не создаются.
+                } finally {
+                    Draw.color(r, g, b, a); // Восстанавливаем цвет для текста, курсора и следующих элементов интерфейса.
+                }
+            }
+        });
+    }
+
+    function refreshSliders(visuals) { // Обновляем окраску слайдеров только той группы, в которой изменился HEX.
+        for (var i = 0; i < visuals.sliders.length; i++) visuals.sliders[i](); // Вызываем сохранённую функцию окраски каждого слайдера группы.
+    }
+
     // СОЗДАНИЕ ПОЛЯ С ПОДПИСЬЮ
-    function buildControl(field, width, synchronize) { // Создаём одно поле; synchronize собирает функции обновления полей после сброса.
+    function buildControl(field, width, synchronize, visuals) { // Создаём поле; synchronize обновляет значения, visuals связывает оформление с цветом группы.
         var block = new Table(); // Объединяем подпись и её поле в маленькую таблицу.
         block.top(); // Выравниваем содержимое по верхнему краю.
         var label = block.add(field.label).width(width).height(20).left().get(); // Добавляем подпись заданной ширины и сохраняем ссылку на Label.
@@ -131,6 +152,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
                 var text = String(control.getText()); // Получаем введённую строку.
                 if (!validColor(text)) return; // До завершения правильного HEX сохраняем прежний цвет «колеса выбора» и «манекена».
                 appearance[field.key].set(Color.valueOf(text)); // Разбираем HEX и меняем существующий Color (ссылки на него остаются действительными).
+                refreshSliders(visuals); // Передаём новый цвет дорожкам и бегункам этой группы (подчёркивания уже ссылаются на тот же Color).
                 saveField(field); // Сохраняем принятый цвет в памяти настроек игры.
                 onChanged(false); // Сообщаем меню об изменении (пересчитывать диаметр не требуется).
             });
@@ -139,20 +161,35 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         } else { // Доля внутреннего радиуса и прозрачность задаются слайдерами.
             control = new Slider(0, 1, 0.01, false); // Создаём горизонтальный слайдер от 0 до 1 с шагом 0.01.
             control.setValue(appearance[field.key], false); // Устанавливаем исходное значение без события изменения.
+            var updateColor = () => { // Связываем оформление штатного слайдера с настройками этой группы.
+                control.setColor(visuals.color); // Штатный Slider применяет этот цвет и к дорожке, и к бегунку, сохраняя их форму.
+                control.color.a = field.type == "alpha" ? 0.5 + 0.5 * appearance[field.key] : 1; // Видимость «Прозр.» меняется от половины стандартной до полной; слайдер «Доля» остаётся обычной видимости.
+            };
+            visuals.sliders.push(updateColor); // Запоминаем обновление окраски для последующих изменений HEX этой группы.
             var updateLabel = () => label.setText(field.type == "ratio" // Выбираем текст подписи по назначению слайдера.
                 ? "Доля: " + Math.round(control.getValue() * 100) + "%" // Долю радиуса показываем в процентах.
                 : "Прозр.: " + Number(control.getValue()).toFixed(2)); // Прозрачность показываем числом с двумя знаками после точки.
             control.moved(value => { // Реагируем на изменение положения бегунка.
                 applyNumber(field, Number(value)); // Применяем новое значение к общему внешнему виду обоих колёс.
+                updateColor(); // Сразу меняем видимость дорожки и бегунка «Прозр.» вслед за его значением.
                 updateLabel(); // Показываем новое число рядом с названием слайдера.
             });
             addTooltip(control, field.type == "ratio" ? "Доля внутреннего радиуса: 0–100%" // Для доли поясняем диапазон процентов.
                 : "Прозрачность: 0 — невидимо, 1 — полностью непрозрачно"); // Для прозрачности поясняем смысл крайних значений.
             sync = () => { // Подготавливаем обновление слайдера после сброса группы.
                 control.setValue(appearance[field.key], false); // Переставляем бегунок без повторного применения настройки.
+                updateColor(); // Возвращаем цвет и видимость слайдера к текущим параметрам после сброса.
                 updateLabel(); // Приводим подпись в соответствие со значением бегунка.
             };
             updateLabel(); // Показываем текущее значение сразу при создании поля.
+            updateColor(); // Применяем цвет и видимость сразу, включая загруженные настройки.
+        }
+        if (control instanceof TextField) { // Числовые поля и HEX получают окрашенное подчёркивание; текст сохраняет штатный цвет.
+            var style = new TextField.TextFieldStyle(control.getStyle()); // Копируем стиль только этого поля, не меняя оформление остальных полей игры.
+            style.invalidBackground = control.getStyle().invalidBackground; // Сохраняем обозначение ошибки отдельно: конструктор копии TextFieldStyle его не переносит.
+            style.background = coloredUnderline(style.background, visuals.color); // Окрашиваем подчёркивание в обычном состоянии.
+            style.focusedBackground = coloredUnderline(style.focusedBackground, visuals.color); // Окрашиваем подчёркивание при вводе, если у стиля предусмотрен отдельный фон фокуса.
+            control.setStyle(style); // Применяем отдельный стиль (красное подчёркивание ошибочного ввода остаётся штатным).
         }
         control.name = "buildwheel-appearance-" + field.key; // Задаём служебное имя поля для поиска в сцене и проверок.
         block.add(control).width(width).height(44); // Задаём ширину типа поля и высоту 44 (стандартный бегунок помещается целиком).
@@ -167,9 +204,10 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         table.add(group.title).colspan(wide ? 4 : 2).left().padBottom(4); // Заголовок занимает все колонки; под ним оставляем отступ.
         table.row(); // Поля начинаются под заголовком.
         var synchronize = []; // Список функций для обновления полей именно этой группы.
-        var metric = group.metric == null ? new Table() : buildControl(group.metric, widths.metric, synchronize); // Создаём размер или оставляем пустое место, если размера нет.
-        var color = buildControl(group.colorField, widths.color, synchronize); // Создаём HEX-поле цвета.
-        var alpha = buildControl(group.alphaField, widths.alpha, synchronize); // Создаём слайдер прозрачности.
+        var visuals = {color: appearance[group.color], sliders: []}; // Общая ссылка на цвет и список обновлений слайдеров только этой группы и этой сборки меню.
+        var metric = group.metric == null ? new Table() : buildControl(group.metric, widths.metric, synchronize, visuals); // Создаём размер или оставляем пустое место, если размера нет.
+        var color = buildControl(group.colorField, widths.color, synchronize, visuals); // Создаём HEX-поле, управляющее цветом оформления всей группы.
+        var alpha = buildControl(group.alphaField, widths.alpha, synchronize, visuals); // Создаём слайдер прозрачности с изменяемой видимостью собственной дорожки и бегунка.
         var resetBlock = new Table(); // Создаём ячейку для кнопки сброса.
         resetBlock.add("").height(20); // Оставляем над кнопкой место высотой с подпись соседних полей.
         resetBlock.row(); // Располагаем кнопку на уровне полей ввода.
