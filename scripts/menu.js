@@ -10,6 +10,65 @@ var libraryModule = require("wheel-library"); // Хранилище незави
 var snapshotsModule = require("wheel-snapshots"); // Получение и проверяемое применение визуала, блоков, колеса или набора.
 var browserModule = require("wheel-browser"); // Браузер сохранений и штатные плашки ввода имени.
 
+// ОБЩИЕ НАСТРОЙКИ УПРАВЛЕНИЯ
+var controlsCache = null; // Один набор настроек используют обработчики main.js и открываемая форма меню.
+exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
+    if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
+    var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
+    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false}; // Заводские значения десяти настроек левой части.
+    for (var key in controls) { // Читаем переключатели и долю сдвига только при создании набора.
+        try {
+            if (key == "edgeShift") { // Единственное дробное значение задаёт отступ от краёв экрана.
+                var saved = Number(Core.settings.getFloat(prefix + key, controls[key])); // Settings хранит долю числом Java Float.
+                if (isFinite(saved) && saved >= 0 && saved <= 1) controls[key] = saved; // Не применяем повреждённый диапазон.
+            } else controls[key] = Core.settings.getBool(prefix + key, controls[key]); // Для переключателей используем штатное чтение Boolean.
+        } catch (error) { // Неверный тип настройки оставляет заводское значение.
+        }
+    }
+    controls.numberColor = Color.white.cpy(); // Собственный цвет номера не меняет глобальный Color.white игры.
+    try { // Неверный сохранённый цвет не мешает открытию мода.
+        var hex = String(Core.settings.getString(prefix + "numberColor", "#FFFFFF")); // Цвет номера хранится отдельно от визуалов колёс.
+        if (hex.length == 7 && hex.charAt(0) == "#") controls.numberColor.set(Color.valueOf(hex)); // Отдельный слайдер прозрачности для номера не требуется.
+    } catch (error) { // Неизвестный HEX оставляет белый цвет.
+    }
+    function updateNumberContrast() { // Подбираем фон номера только при загрузке или изменении цвета, а не при каждом открытии колеса.
+        function linear(value) { return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4); } // Учитываем воспринимаемую яркость RGB-канала.
+        var color = controls.numberColor; // Измеряем яркость собственного цвета текста.
+        controls.numberDarkBackground = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b) > 0.179; // Выбираем чёрный либо белый фон с большим контрастом к тексту.
+    }
+    updateNumberContrast(); // Готовим производный параметр один раз после чтения сохранённого цвета.
+    controls.set = function(key, value) { // Поля формы меняют этот же объект, поэтому новое поведение действует сразу.
+        if (key == "numberColor") { // Палитра выбора цвета возвращает объект Color.
+            controls.numberColor.set(value); // Сохраняем ссылку на существующий цвет для номера.
+            updateNumberContrast(); // Последующее открытие номера использует готовый выбор контрастного фона.
+            Core.settings.put(prefix + key, "#" + String(controls.numberColor.toString()).substring(0, 6).toUpperCase()); // Записываем только RGB.
+        } else if (key == "edgeShift") { // Слайдер передаёт долю от нуля до единицы.
+            controls.edgeShift = value; // Геометрия открытия читает уже готовое число.
+            Core.settings.put(prefix + key, new java.lang.Float(String(value))); // Не передаём Settings автоматически упакованный JS Double.
+        } else { // Остальные параметры — логические переключатели.
+            controls[key] = !!value; // Нормализуем значение к true/false.
+            Core.settings.put(prefix + key, !!value); // Диск записывает существующий flushSettings при закрытии настроек.
+        }
+    };
+    var bindings = {wheels: []}; // Назначения хранятся как штатные KeyBind Mindustry и сохраняются штатным методом save.
+    function binding(name, title, defaultKey) { // Добавляем только собственные действия мода, не меняя игровые назначения.
+        Core.bundle.getProperties().put("keybind.buildwheel-" + name + ".name", title); // Штатное окно переназначения получает понятный заголовок.
+        return KeyBind.add("buildwheel-" + name, defaultKey, "buildwheel"); // Конструктор сразу восстанавливает сохранённую клавишу либо использует исходную.
+    }
+    Core.bundle.getProperties().put("category.buildwheel.name", "BuildWheel"); // Собственные действия также доступны в стандартном списке управления игры.
+    bindings.wheelModifier = binding("wheel-modifier", "Выбор колеса: Второстепенная", KeyCode.controlLeft); // Ctrl по умолчанию заменяет тестовый Shift.
+    for (var n = 0; n < 10; n++) bindings.wheels[n] = binding("wheel-" + n, "Колесо " + n, KeyCode.valueOf("num" + n)); // Каждое колесо получает собственную переназначаемую основную клавишу.
+    bindings.menuModifier = binding("menu-modifier", "Радиальное меню: Второстепенная", KeyCode.controlLeft); // Исходный модификатор меню — Ctrl.
+    bindings.menuKey = binding("menu-key", "Радиальное меню: Основная", KeyCode.minus); // Исходная основная клавиша меню — минус.
+    bindings.paletteModifier = binding("palette-modifier", "Палитра: Второстепенная", KeyCode.unset); // Без модификатора достаточно назначенной основной клавиши.
+    bindings.paletteKey = binding("palette-key", "Палитра: Основная", KeyCode.unset); // Палитра не имеет горячей клавиши до назначения пользователем.
+    bindings.scrollKey = binding("scroll-key", "Клавиша + колёсико мыши", KeyCode.unset); // Caps Lock больше не назначен по умолчанию.
+    controls.bindings = bindings; // Обработчики main.js читают текущие значения этих же KeyBind.
+    controls.key = function(bind) { return bind.value == null || bind.value.key == null ? KeyCode.unset : bind.value.key; }; // Отключённое назначение представляется единым KeyCode.unset.
+    controlsCache = controls; // Скрытые меню не создают вторых наборов параметров и обработчиков.
+    return controls; // main.js получает те же настройки, которые позднее показывает меню.
+};
+
 // ------------------------------------------------------------
 // СОЗДАНИЕ РЕДАКТОРА И ЕГО СОСТОЯНИЕ
 // ------------------------------------------------------------
@@ -19,6 +78,7 @@ var browserModule = require("wheel-browser"); // Браузер сохранен
 // exports — публичная часть модуля. api содержит только функции и параметры,
 // явно переданные из main.js; обратного require("main") здесь нет.
 exports.create = function(api) {
+    var controls = api.controls || exports.getControls(); // Главный скрипт и форма работают с одним набором настроек управления.
     var wheelView = api.wheelView; // Общая основа с игровым колесом; настройки внешнего вида не копируем.
     var wheelCount = wheelView.wheelCount; // Число номеров берём из общей основы колёс; у каждого номера свой комплект визуала.
     var settingsPrefix = "buildwheel.slot."; // Начало ключей Core.settings: отделяет наши настройки от настроек других модов.
@@ -52,8 +112,10 @@ exports.create = function(api) {
     var previewRowCell = null; // Ячейка объединяет «манекен» и боковые кнопки, не сдвигая круг дополнительной колонкой.
     var toolsSize = 40, toolsHeight = 258, toolsReserve = 48; // Шесть квадратных кнопок, пять зазоров по 2 и дополнительный зазор 8 после замка.
     var applyingSavedData = false; // Во время применения набора подгоняем раскладку только один раз после всех десяти комплектов.
+    var bindingButtons = [], bindingModal = null, nativeRebindField = null; // Метки клавиш обновляются при изменении назначения, а не каждый кадр.
     var palette = paletteModule.create(() => { settingsChanged = true; }, () => { // Создаём палитру с уведомлениями об изменении настройки и закрытии окна.
-        if (dialog.isShown()) Core.scene.setScrollFocus(blockPane); // При возврате из палитры передаём колёсико мыши актуальному списку блоков.
+        if (dialog.isShown()) focusBlockList(); // При возврате из палитры передаём колёсико мыши актуальному списку блоков.
+        else flushSettings(); // Самостоятельно открытая палитра сохраняет изменения и без последующего закрытия «Радиального меню».
     });
 
     // ШТАТНЫЕ ПОДСКАЗКИ НАСТРОЕК И ПРИВЯЗКА К ЛЕВОМУ КРАЮ ЭЛЕМЕНТА
@@ -478,6 +540,131 @@ exports.create = function(api) {
         if (dialog.isShown() && !palette.isShown() && (saves == null || !saves.isShown())) Core.scene.setScrollFocus(blockPane); // Открытая палитра сохраняет прокрутку за своим рисунком.
     }
 
+    // ОБЩИЕ НАСТРОЙКИ ПОД СПИСКОМ БЛОКОВ
+    function addControlToggle(table, width, title, key, tooltip) { // Одинаковая строка подписи и штатного переключателя.
+        var label = table.add(title).width(Math.max(120, width - 168)).minHeight(44).left().get(); // Длинная подпись получает место слева от колонки управления.
+        label.setWrap(true); // На маленьком экране подпись переносится внутри своей строки.
+        var toggle = new CheckBox(""); // Используем обычный игровой checkbox без собственного рисования.
+        toggle.name = "buildwheel-control-" + key; // Служебное имя настройки.
+        toggle.setChecked(controls[key]); // Начальное состояние читаем из общего набора.
+        toggle.changed(() => { controls.set(key, toggle.isChecked()); settingsChanged = true; }); // Применяем новое поведение сразу и отмечаем запись при закрытии меню.
+        table.add(toggle).width(160).height(44).right(); // Все переключатели занимают одинаковую колонку справа.
+        if (tooltip != null) addTooltip(toggle, tooltip); // Подсказка получает прежний штатный серый стиль.
+        table.row(); // Следующая настройка начинается с новой строки.
+    }
+
+    // ШТАТНОЕ ОКНО ПЕРЕНАЗНАЧЕНИЯ КЛАВИШ
+    function refreshBindingButtons() { // Переписываем подписи после назначения, отключения или сброса клавиши.
+        for (var i = 0; i < bindingButtons.length; i++) { // Только кнопки текущей сборки формы.
+            var entry = bindingButtons[i], key = controls.key(entry.binding); // Читаем актуальный KeyCode.
+            entry.button.setText(key == KeyCode.unset ? entry.empty : String(key.value)); // value содержит английское название, независимо от языка игры.
+        }
+    }
+
+    function openKeyBinding(bind) { // Повторяем штатную плашку KeybindDialog: та же разметка, размеры кнопок и способы назначения.
+        api.closeWheel(); // Системный курсор и игровое колесо не должны мешать вводу новой клавиши.
+        var modal = new Dialog(Core.bundle.get("keybind." + bind.name + ".name", bind.name)); // Обычный Dialog использует тот же стиль, что окно управления игры.
+        modal.name = "buildwheel-rebind"; modal.title.setAlignment(Align.center); // Заголовок и центрирование соответствуют штатной плашке.
+        modal.cont.add("@keybind.press").pad(40); // Текст «Нажмите клавишу» получает штатные отступы.
+        var blocker = extend(InputListener, {touchDown: function(event) { event.cancel(); return true; }}); // Клик по кнопке плашки не назначает её ЛКМ как новую клавишу.
+        modal.buttons.button("@back", Icon.left, () => modal.hide()).size(210, 64).name("buildwheel-rebind-back").get().addListener(blocker); // Назад оставляет прежнюю клавишу.
+        modal.buttons.button("@settings.unbindKey", Icon.cancel, () => { bind.unset(); bind.save(); modal.hide(); }).size(210, 64).name("buildwheel-rebind-unset").get().addListener(blocker); // Отключение сохраняет штатный KeyCode.unset.
+        modal.titleTable.getCells().first().pad(4); // Заголовок получает отступ из KeybindDialog.
+        var accept = key => { bind.value = new KeyBind.Axis(key); bind.save(); modal.hide(); }; // Назначение хранится обычным методом KeyBind, без собственных форматов клавиш.
+        modal.addListener(extend(InputListener, { // Штатная схема принимает любую клавишу или кнопку мыши.
+            keyDown: function(event, key) { accept(key); return false; }, // Escape также можно назначить, как в стандартном окне управления.
+            touchDown: function(event, x, y, pointer, button) { if (!Vars.mobile) accept(button); return false; } // Кнопки «Назад»/«Отключить» остановлены blocker выше.
+        }));
+        bindingModal = modal; // Горячие клавиши мода оставляют ввод этой плашке.
+        var previous = controls.key(bind); // Запоминаем состояние до пользовательского изменения.
+        modal.hidden(() => { refreshBindingButtons(); if (controls.key(bind) != previous) settingsChanged = true; }); // Значение уже сохранено до закрытия, поэтому подписи обновляются сразу.
+        modal.show(); Core.scene.setScrollFocus(modal); // Фокус получает сама плашка, без скрытого родительского окна «Управление».
+    }
+
+    function keyButton(table, bind, empty, width, name, tooltip) { // Все кнопки одного типа получают одинаковую ширину.
+        var key = controls.key(bind); // Подпись отсутствующего назначения остаётся названием кнопки.
+        var button = table.button(key == KeyCode.unset ? empty : String(key.value), Styles.grayt, () => openKeyBinding(bind)).width(width).height(44).pad(2).name("buildwheel-key-" + name).get(); // Открываем штатное переназначение по ЛКМ.
+        button.getLabel().setEllipsis(true); // Длинное английское название не перекрывает соседние кнопки.
+        button.getLabelCell().minWidth(0); // Разрешаем узкой цифровой кнопке сократить длинное имя клавиши.
+        bindingButtons.push({binding: bind, button: button, empty: empty}); // Для обновления не нужен update-обработчик.
+        if (tooltip != null) addTooltip(button, tooltip); // Например, «Колесо 1» сохраняет смысл при назначении другой клавиши.
+    }
+
+    function resetBindings(binds) { // Сбрасываем только выбранную комбинацию, а не все назначения игры.
+        for (var i = 0; i < binds.length; i++) { binds[i].resetToDefault(); binds[i].save(); } // Заводские значения принадлежат собственным KeyBind мода.
+        settingsChanged = true; refreshBindingButtons(); // Форма сразу показывает восстановленные клавиши.
+    }
+
+    function resetKeyButton(table, binds, width, name) { // Кнопки сброса имеют тот же размер и одинаковое поведение во всех строках клавиш.
+        var button = table.button("Сбросить", Icon.refresh, Styles.grayt, () => resetBindings(binds)).width(width).height(44).pad(2).name("buildwheel-key-reset-" + name).get(); // Не изменяем назначения других групп.
+        button.getLabel().setEllipsis(true); button.getLabelCell().minWidth(0); // На узком окне текст не выходит за кнопку и не перекрывает соседние элементы.
+        addTooltip(button, "Сбросить по умолчанию"); // Полное действие остаётся читаемым и при сокращении текста.
+    }
+
+    function buildWheelKeys(width, buttonWidth) { // Номера 1–9,0 переносятся на следующую строку при нехватке места.
+        var table = new Table(), smallWidth = buttonWidth / 2.5; // Второстепенная кнопка ровно в 2,5 раза шире цифровых.
+        table.left(); // Переносимые ряды начинаются от одного левого края.
+        keyButton(table, controls.bindings.wheelModifier, "Второстепенная", buttonWidth, "wheel-modifier", null); // Модификатор может быть отключён.
+        table.add("+").width(20); // Разделитель показывает комбинацию с каждой основной клавишей.
+        var occupied = buttonWidth + 24; // Учитываем кнопку, её отступы и знак плюс.
+        for (var n = 1; n <= 10; n++) { // Используем привычный порядок стандартной клавиатуры.
+            if (occupied + smallWidth + 4 > width) { table.row(); occupied = 0; } // Переносим кнопку целиком, сохраняя размер.
+            var number = n % 10; // Последнее место соответствует колесу №0.
+            keyButton(table, controls.bindings.wheels[number], String(number), smallWidth, "wheel-" + number, "Колесо " + number); // Каждая подсказка обозначает неизменный номер колеса.
+            occupied += smallWidth + 4; // Подготавливаем место следующей кнопки.
+        }
+        if (occupied + buttonWidth + 4 > width) table.row(); // Сброс тоже переносится, если остатка строки недостаточно.
+        var binds = [controls.bindings.wheelModifier].concat(controls.bindings.wheels); // Сброс затрагивает модификатор и все десять основных клавиш этой группы.
+        resetKeyButton(table, binds, buttonWidth, "wheels"); // Возвращаем Ctrl и цифры 1–9,0.
+        return table; // Основная форма располагает эту группу под своим заголовком.
+    }
+
+    function buildKeyCombination(title, modifier, primary, width, reset, name) { // Одна строка для меню или палитры с одинаковыми кнопками клавиш.
+        var row = new Table(); row.left(); // Строка располагается по левому краю формы.
+        var label = row.add(title).growX().minWidth(100).left().get(); label.setWrap(true); // Подпись использует оставшееся место, не сжимая кнопки.
+        keyButton(row, modifier, "Второстепенная", width, name + "-modifier", null); // Отключённая второстепенная клавиша не требуется для срабатывания основной.
+        row.add("+").width(20); // Знак комбинации не изменяет ширину кнопок.
+        keyButton(row, primary, "Основная", width, name + "-key", null); // Без основной клавиши действие выключено.
+        if (reset) resetKeyButton(row, [modifier, primary], width, name); // Для меню восстанавливаем Ctrl + минус.
+        return row; // Все элементы остаются в одной строке.
+    }
+
+    function buildControlSettings(width) { // Собираем левую часть настроек, не создавая обработчиков кадров.
+        bindingButtons = []; // Перестройка окна освобождает ссылки на прежние кнопки клавиш.
+        var table = new Table(); // Таблица располагается сразу под списком блоков.
+        table.left(); // Сохраняем общий левый край списка и подписей настроек.
+        var shiftLabel = table.add("Сдвиг колеса при нехватке места: " + Math.round(controls.edgeShift * 100) + "%").width(Math.max(120, width - 168)).minHeight(44).left().get(); // Точное значение видно рядом с названием.
+        shiftLabel.setWrap(true); // Длинный текст остаётся внутри левой колонки.
+        var shift = new Slider(0, 100, 1, false); // 0 выключает сдвиг, 100 задаёт отступ в полный радиус.
+        shift.name = "buildwheel-control-edgeShift"; shift.setValue(Math.round(controls.edgeShift * 100), false); // Показываем сохранённое значение без события изменения.
+        shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText("Сдвиг колеса при нехватке места: " + Math.round(value) + "%"); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
+        table.add(shift).width(160).height(44); // Штатный горизонтальный ползунок занимает колонку управления.
+        addTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, телепортируя и положение мыши."); // Объясняем связь колеса и физического курсора.
+        table.row(); // Переключатели располагаются ниже сдвига.
+        addControlToggle(table, width, "Отключить \"категория/выбор блока №\"", "disableNumberKeys", "В Mindustry цифры 0-9 в настройках управления по умолчанию используются как быстрые клавиши выбора категорий и блоков, тем самым присваивая каждому блоку свой номер."); // По умолчанию цифровой выбор игры отключён.
+        addControlToggle(table, width, "Ограничить курсор диаметром колеса", "clipOuter", "Останавливает движение курсора за границу диаметра открытого колеса строительства у это самой границы."); // Ограничиваем расстояние от центра внешним радиусом.
+        addControlToggle(table, width, "Ограничить курсор внутренним кругом", "clipInner", "Останавливает движение курсора чуть за границей внутренного круга колеса строительства - для молниеносного выбора."); // При двух включённых границах действует меньшая окружность.
+        var buttonWidth = Math.max(80, Math.min(150, (width - 160) / 3)); // Одинаковая ширина категории клавиш подбирается по доступной ширине левой части.
+        table.add("Выбор колеса").colspan(2).left().padTop(8); table.row(); // Заголовок отделяется от переносимых кнопок.
+        table.add(buildWheelKeys(width, buttonWidth)).colspan(2).width(width).left(); table.row(); // Полная группа номеров занимает обе колонки формы.
+        table.add(buildKeyCombination("Радиальное меню", controls.bindings.menuModifier, controls.bindings.menuKey, buttonWidth, true, "menu")).colspan(2).width(width).left(); table.row(); // Сброс этой строки не меняет клавиши колёс.
+        table.add(buildKeyCombination("Палитра", controls.bindings.paletteModifier, controls.bindings.paletteKey, buttonWidth, false, "palette")).colspan(2).width(width).left(); table.row(); // По умолчанию обе кнопки не назначены.
+        addControlToggle(table, width, "Открывать палитру в главном меню", "paletteInMenu", null); // Разрешение применяется только к открытию палитры горячей клавишей.
+        var scrollRow = new Table(); scrollRow.left(); // Прокрутке нужна только одна удерживаемая клавиша.
+        scrollRow.add("Клавиша + колёсико мыши").growX().left(); // Подпись располагается слева от основной кнопки.
+        keyButton(scrollRow, controls.bindings.scrollKey, "Основная", buttonWidth, "scroll-key", "Клавиша перехватывает 'Масштабирование' колёсиком, по умолчанию отключено."); // До назначения клавиши прокрутка остаётся обычной.
+        table.add(scrollRow).colspan(2).width(width).left(); table.row(); // Сохраняем одну строку этой настройки.
+        var numberRow = new Table(); numberRow.left(); // Номер и его цвет располагаются в одной строке.
+        numberRow.add("Отображать номер колеса").growX().left(); // Эта настройка относится только к игровому колесу.
+        var showNumber = new CheckBox(""); showNumber.setChecked(controls.showNumber); showNumber.name = "buildwheel-control-showNumber"; // По умолчанию номер выключен.
+        showNumber.changed(() => { controls.set("showNumber", showNumber.isChecked()); settingsChanged = true; }); // Новый режим действует при следующем открытии или переключении колеса.
+        numberRow.add(showNumber).size(44); // Используем штатный checkbox рядом с кнопкой цвета.
+        var colorStyle = new TextButton.TextButtonStyle(Styles.grayt); colorStyle.fontColor = controls.numberColor; // Собственный стиль показывает выбранный цвет, не меняя общие стили игры.
+        numberRow.button("Цвет", colorStyle, () => Vars.ui.picker.show(controls.numberColor, false, color => { controls.set("numberColor", color); settingsChanged = true; })).width(buttonWidth).height(44).pad(2).name("buildwheel-control-numberColor"); // Штатный ColorPicker сохраняет RGB без отдельной прозрачности текста.
+        table.add(numberRow).colspan(2).width(width).left(); table.row(); // Завершаем список десятым пунктом.
+        return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
+    }
+
     // ------------------------------------------------------------
     // ПОСТРОЕНИЕ ОКНА НАСТРОЕК
     // ------------------------------------------------------------
@@ -488,7 +675,7 @@ exports.create = function(api) {
         var screenWidth = Core.scene.getWidth() / Scl.scl();  // Cell.width/height сами умножают числа на Scl. Деление Scl.scl() переводит реальные
         var screenHeight = Core.scene.getHeight() / Scl.scl();// размеры сцены в UI-единицы, сохраняя доли экрана при любом масштабе UI.
         var contentWidth = screenWidth * 0.92; // Всё содержимое занимает 92% ширины экрана.
-        var listWidth = contentWidth * 0.50; // 50% ширины отводим левой части.
+        var listWidth = Math.max(contentWidth * 0.50, 372); // 50% ширины отводим левой части; минимум 372 сохраняет одну строку комбинации клавиш и не даёт ей налезать на правую часть.
         previewSize = wheelView.getVisual(editedWheel).appearance.diameter; // «Манекен» получает размер из комплекта выбранного номера.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
         var appearanceWidth = Math.max(240, Math.min(contentWidth * 0.45 + 40, 600)); // Выбираем ширину формы по экрану (запас 40 распределяется между полями размера и HEX).
@@ -563,6 +750,8 @@ exports.create = function(api) {
             }
         }));
         left.add(blockPane).size(listWidth, listHeight); //Помещаем таблицу блоков в левую таблицу с адаптивными размерами
+        left.row(); // Общие настройки начинаются под прокручиваемым списком блоков.
+        left.add(buildControlSettings(listWidth)).width(listWidth).left().padTop(12); // Помещаем управление в ту же левую колонку.
         body.add(left).width(listWidth).top();
 
         // ПРАВАЯ ЧАСТЬ: номер колеса, выбранный сектор, масштаб и манекен.
@@ -625,8 +814,17 @@ exports.create = function(api) {
 
 
         var contentPane = new ScrollPane(body, Styles.defaultPane); //помещаем всё меню настроек в контейнер прокрутки, защищая от обрезки при малом разрешении
+        contentPane.name = "buildwheel-settings-scroll"; // Общая прокрутка обслуживает и настройки под списком блоков.
         contentPane.setScrollingDisabled(false, false); // На узком окне прокручиваем содержимое и по горизонтали, сохраняя размер манекена.
         contentPane.setFadeScrollBars(false);
+        contentPane.setScrollbarsOnTop(false); // Полосы общей прокрутки получают своё место, не закрывая последние настройки.
+        contentPane.addListener(extend(InputListener, { // Меняем фокус прокрутки только при фактическом движении над открытым меню.
+            mouseMoved: function(event) {
+                var target = event.targetActor != null && event.targetActor.isDescendantOf(blockPane) ? blockPane : contentPane; // Над блоками прокручиваем список, над настройками — всё содержимое меню.
+                if (Core.scene.getScrollFocus() !== target) Core.scene.setScrollFocus(target); // Не генерируем повторные события фокуса при движении внутри той же области.
+                return false; // Поля и кнопки продолжают получать своё обычное наведение.
+            }
+        }));
         dialog.cont.add(contentPane).width(contentWidth).growY().minHeight(0); // В наше Меню контейнер прокрутки: Заполняем оставшуюся высоту диалога; minHeight(0) разрешает сжатие с прокруткой.
         rebuildGrid();
         refreshSectorControls();
@@ -636,6 +834,7 @@ exports.create = function(api) {
     // ОТКРЫТИЕ, ЗАКРЫТИЕ И ПЕРЕСТРОЙКА ПО РАЗМЕРУ ОКНА
     // ------------------------------------------------------------
     function hide() { //Закрыть меню настроек
+        if (bindingModal != null && bindingModal.isShown()) bindingModal.hide(); // Сброс мира не оставляет плашку назначения над закрытым меню.
         saves.hide(); // Не оставляем браузер или его дочернее окно над закрытым меню.
         palette.hide(); // При закрытии всего редактора палитра тоже должна исчезнуть.
         if (dialog.isShown()) dialog.hide();
@@ -697,6 +896,9 @@ exports.create = function(api) {
     // Эти методы вызывает уже существующий InputProcessor в main.js.
     // Отдельный глобальный обработчик ввода и покадровая проверка не нужны.
     function handleKeyDown(key) {
+        if (palette.isShown() && isCloseKey(key) && topDialog() != null && String(topDialog().name) == "buildwheel-palette") { // Самостоятельная палитра закрывается той же клавишей, что и палитра поверх настроек.
+            closeKeysCaptured[key.ordinal()] = true; Core.app.post(palette.hide); return true; // Сначала закрываем палитру и поглощаем отпускание клавиши.
+        }
         if (dialog.isShown()) {
             if (isCloseKey(key)) {
                 if (saves.isShown()) { // Сначала закрываем браузер, оставляя «Радиальное меню» открытым.
@@ -732,6 +934,14 @@ exports.create = function(api) {
     // переменные редактора остаются внутри create().
     return {
         show: show,
+        showPalette: function() { api.closeWheel(); palette.show(); }, // Горячая клавиша открывает палитру напрямую, не создавая родительское окно настроек.
+        isRebinding: function() { // main.js оставляет ввод новой клавиши штатному диалогу игры.
+            if (bindingModal != null && bindingModal.isShown()) return true; // Плашка открыта собственной кнопкой мода.
+            if (!Core.scene.hasDialog() || Vars.ui.controls == null) return false; // В игре без окон нет ни отражения, ни дополнительного поиска.
+            if (nativeRebindField == null) { nativeRebindField = java.lang.Class.forName("mindustry.ui.dialogs.KeybindDialog").getDeclaredField("rebindDialog"); nativeRebindField.setAccessible(true); } // Поле базового класса подходит и модифицированному наследнику меню управления; ищем его один раз.
+            var nativeModal = nativeRebindField.get(Vars.ui.controls); // Та же плашка могла быть открыта из стандартного раздела «Управление».
+            return nativeModal != null && nativeModal.isShown(); // Назначение через ванильное меню также не должно запускать палитру или колесо.
+        },
         getIconScale: getIconScale, // Игровое колесо запрашивает сохранённый масштаб своей иконки.
         handleKeyDown: handleKeyDown, // Закрытие настроек клавишей игрового меню или назначенной на неё кнопкой мыши.
         handleKeyUp: handleKeyUp // Отпускания перехваченных клавиш закрытия, даже если окно уже исчезло.
