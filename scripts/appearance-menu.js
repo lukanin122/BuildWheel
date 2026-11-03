@@ -8,6 +8,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
     var legacyPrefix = "buildwheel.appearance."; // Старые общие параметры служат исходным видом для ещё не перенесённых номеров.
     var synchronizeGroups = []; // Функции переключения уже созданных полей; при смене номера форму не пересоздаём.
     var needsSave = false; // Сообщаем меню, что впервые созданные индивидуальные настройки нужно записать на диск.
+    var sectorCountField = {min: 1, max: wheelView.maxSectorCount, integer: true}; // Диапазон слайдера и проверки числа секторов берём из общей основы колеса.
 
     // СОСТАВ ГРУПП НАСТРОЕК
     var groups = [ // id — имя группы в коде; title — заголовок; metric — размер; color и alpha — имена параметров appearance.
@@ -93,7 +94,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         var countKey = settingsPrefix + number + ".sectorCount"; // Количество секторов хранится рядом с appearance того же комплекта.
         try { // Проверяем число заранее, чтобы повреждённые настройки не создавали чрезмерно длинные циклы рисования.
             var count = Number(Core.settings.getInt(countKey, wheelView.defaultSectorCount)); // Читаем сохранённый Java Integer; дробный тип будет отклонён без округления.
-            if (isFinite(count) && count >= 1 && count <= 128 && count == Math.floor(count)) visual.sectorCount = count; // Принимаем целое число 1–128; отдельного поля изменения числа секторов в интерфейсе пока нет.
+            if (validNumber(sectorCountField, count)) visual.sectorCount = count; // Принимаем только целое число в том же диапазоне, что у слайдера «Число секторов».
         } catch (error) { // При неверном типе сохраняем исходные восемь секторов.
         }
         if (!Core.settings.has(countKey)) { // Впервые записываем число секторов даже у колеса без пользовательских правок.
@@ -277,6 +278,41 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         for (var i = 0; i < synchronizeGroups.length; i++) synchronizeGroups[i](); // Показываем новый комплект в тех же полях и стилях формы.
     }
 
+    // ЧИСЛО СЕКТОРОВ ПОД НАСТРОЙКАМИ ПОДСВЕТКИ
+    function buildSectorCount(widths, wide, width) { // Используем те же ширины колонок, что у групп внешнего вида.
+        var row = new Table(); // На обычной ширине подпись и слайдер находятся в одном ряду.
+        row.left(); // Начало строки совпадает с левым краем остальных настроек.
+        var label = new Label(""); // Подпись показывает и название настройки, и выбранное число.
+        label.name = "buildwheel-sector-count-label"; // Служебное имя для проверки текста после переключения колеса.
+        if (wide) row.add(label).width(widths.metric + widths.color + 6).height(44).left(); // Подпись занимает колонки размера и HEX вместе с зазором между ними.
+        else { // Узкая форма уже располагает «Прозр.» отдельным нижним рядом, начиная от левого края.
+            row.add(label).colspan(2).width(width).height(20).left(); // Сохраняем читаемость подписи, не отнимая место у слайдера.
+            row.row(); // Ползунок будет строго под ползунком «Подсветки сектора» и на узкой форме.
+        }
+        var slider = new Slider(sectorCountField.min, sectorCountField.max, 1, false); // Штатный горизонтальный слайдер с целыми значениями от 1 до заданного предела.
+        slider.name = "buildwheel-sector-count"; // Служебное имя настройки числа секторов.
+        var synchronize = () => { // Обновляем эту же строку при смене номера и применении сохранённого визуала.
+            var count = wheelView.getVisual(editedWheel).sectorCount; // Получаем число секторов собственного визуала выбранного номера.
+            slider.setValue(count, false); // Синхронизация не считается пользовательским изменением и не вызывает сохранение повторно.
+            label.setText("Число секторов: " + count); // Показываем точное целое значение рядом со слайдером.
+        };
+        slider.moved(value => { // Обрабатываем только изменение целого шага слайдера.
+            var visual = wheelView.getVisual(editedWheel), count = Math.round(value); // Получаем действующий комплект и выбранное число секторов.
+            if (count == visual.sectorCount) return; // Не выполняем повторную запись того же значения.
+            var previousCount = visual.sectorCount; // Меню сохранит длину прежнего списка блоков перед скрытием лишних секторов.
+            visual.sectorCount = count; // И «манекен», и игровое колесо читают геометрию из этого комплекта.
+            Core.settings.put(settingsPrefix + editedWheel + ".sectorCount", new java.lang.Integer(String(count))); // Сохраняем отдельное число секторов этого номера.
+            label.setText("Число секторов: " + count); // Подпись меняется сразу при перемещении бегунка.
+            onChanged(false, previousCount); // Помечаем настройки изменёнными и просим меню обновить выделение и название сектора.
+        });
+        addTooltip(slider, "От " + sectorCountField.min + " до " + sectorCountField.max); // При исходном пределе подсказка показывает «От 1 до 16».
+        row.add(slider).width(widths.alpha).height(44).padLeft(wide ? 6 : 0); // Ширина и начало ползунка совпадают с колонкой «Прозр.» группы выше.
+        row.add().width(widths.reset).padLeft(6); // Оставляем пустое место под колонкой refresh, сохраняя выравнивание слайдера.
+        synchronizeGroups.push(synchronize); // Не пересоздаём строку при переключении номера колеса.
+        synchronize(); // Начальное значение берём из сохранённого комплекта, а без настройки это восемь секторов.
+        return row; // Форма поместит строку сразу под «Подсветкой сектора».
+    }
+
     // НЕЗАВИСИМЫЙ СНИМОК ВИЗУАЛА И ПРИМЕНЕНИЕ СОХРАНЕНИЯ
     function capture(number) { // Преобразуем параметры колеса в обычные данные для библиотеки, без ссылок на Java Color.
         var visual = wheelView.getVisual(number), data = {}; // Читаем собственный комплект указанного номера.
@@ -288,7 +324,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
     }
 
     function validSnapshot(data) { // Полная проверка выполняется до замены хотя бы одного действующего параметра.
-        if (data == null || data.appearance == null || typeof data.sectorCount != "number" || !validNumber({min: 1, max: 128, integer: true}, data.sectorCount)) return false; // Отсеиваем неполный визуал и неверное число секторов.
+        if (data == null || data.appearance == null || typeof data.sectorCount != "number" || !validNumber(sectorCountField, data.sectorCount)) return false; // Отсеиваем неполный визуал и неверное число секторов.
         for (var i = 0; i < fields.length; i++) { // Требуем весь набор параметров, а не частичное повреждённое сохранение.
             var field = fields[i], value = data.appearance[field.key]; // Читаем параметр без изменения рабочего appearance.
             if (field.type == "color" ? typeof value != "string" || !validColor(value) : typeof value != "number" || !validNumber(field, value)) return false; // Используем те же ограничения, что у полей настроек.
@@ -330,6 +366,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
             table.add(buildGroup(groups[i], widths, wide)).width(width).left().padBottom(16); // Размещаем группу и оставляем под ней отступ от следующей секции.
             table.row(); // Каждая группа начинается с нового ряда общей формы.
         }
+        table.add(buildSectorCount(widths, wide, width)).width(width).left(); // Последняя строка управляет числом секторов и располагается под настройками подсветки.
         return table; // Передаём меню форму для размещения под «манекеном».
     }
 

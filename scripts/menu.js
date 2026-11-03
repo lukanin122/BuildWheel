@@ -70,9 +70,14 @@ exports.create = function(api) {
     }
 
     // СВЯЗЬ НАСТРОЕК ВИДА С МЕНЮ
-    var appearanceEditor = appearanceMenuModule.create(wheelView, diameterChanged => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
+    var appearanceEditor = appearanceMenuModule.create(wheelView, (diameterChanged, previousSectorCount) => { // Создаём редактор внешнего вида и принимаем уведомления о его изменениях.
         settingsChanged = true; // Отмечаем, что настройки потребуется записать на диск при закрытии меню.
         if (diameterChanged && !applyingSavedData) resizePreview(); // Подгоняем «манекен» редактируемого номера, сохраняя поля и фокус ввода; игровое колесо возьмёт диаметр при открытии.
+        if (previousSectorCount != null) { // Число секторов изменено слайдером; блоки за новой границей должны оставаться сохранёнными.
+            iconScales[editedWheel].length = Math.max(iconScales[editedWheel].length, previousSectorCount, wheelView.getVisual(editedWheel).sectorCount); // Новые места используют масштаб 100%, старые места и их значения не удаляются.
+            Core.settings.put(settingsPrefix + editedWheel + ".count", new java.lang.Integer(String(iconScales[editedWheel].length))); // Сохраняем длину массива блоков независимо от числа видимых секторов.
+            refreshSectorControls(); // Обновляем направления и снимаем выделение, если выбранный сектор больше не виден.
+        }
     });
     if (appearanceEditor.needsSave) settingsChanged = true; // Сохраняем индивидуальные комплекты, впервые созданные из прежнего общего вида.
 
@@ -218,9 +223,11 @@ exports.create = function(api) {
     // Меняем доступность к настройке сектора и выделеем включённые кнопки. (таблица блоков обновляется rebuildGrid())
     function refreshSectorControls() {
         if (sectorLabel == null) return; // До buildInterface иконок ещё может не быть для обновления
+        var sectorCount = wheelView.getVisual(editedWheel).sectorCount; // Подписи и допустимое выделение зависят от текущего числа секторов «манекена».
+        if (editedSector >= sectorCount) editedSector = -1; // Уменьшение числа секторов снимает выделение скрытого слота, сохраняя сам блок.
         var selected = editedSector >= 0; // Есть ли 'зелёный' сектор, для которого разрешено менять настройки?
         var block = selected ? api.getBlock(editedWheel, editedSector) : null; //ставим нужный блок
-        var sectorName = wheelView.getVisual(editedWheel).sectorCount == 8 ? directionNames[editedSector] : "Сектор " + (editedSector + 1); // Названия сторон света подходят восьми секторам; для другого числа используем номер.
+        var sectorName = sectorCount == 8 ? directionNames[editedSector] : sectorCount == 4 ? directionNames[editedSector * 2] : "Сектор " + (editedSector + 1); // У восьми секторов используем все направления, у четырёх — Север, Восток, Юг, Запад; у остальных — номер с единицы.
         sectorLabel.setText(selected
             ? sectorName + ": " + (block == null ? "пустой слот" : String(block.localizedName))
             : "Выберите сектор на колесе"); //описание над колесом?

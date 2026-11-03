@@ -6,6 +6,7 @@ var uiSounds = require("sounds"); // Этот же модуль использу
 exports.create = function(api) {
     var wheelCount = 10; // Десять номеров 0–9; порядок их переключения задаётся обработчиками ввода и меню.
     var defaultSectorCount = 8; // Исходное количество секторов; каждый комплект визуала хранит собственное значение.
+    var maxSectorCount = 16; // Верхний предел числа видимых секторов; эта переменная задаёт диапазон слайдера и проверки сохраняемого визуала.
 
     // Общий образец заводских значений; по нему один раз создаём отдельный визуал для каждого номера.
     // «Колесо выбора» и «манекен» одного номера используют один и тот же комплект данных.
@@ -137,9 +138,10 @@ exports.create = function(api) {
     function drawSector(centerX, centerY, radius, sector, appearance, sectorAngle) { // Используем уже выбранные параметры рисуемого колеса.
         var innerRadius = radius * appearance.innerRadiusRatio;
         var start = sector * sectorAngle - sectorAngle / 2; //угол левой линии нужного сектора
-        for (var part = 0; part < 6; part++) { // Сектор состоит из шести четырёхугольников; больше частей даёт более плавную дугу.
-            var angleA = (start + sectorAngle * part / 6) * Math.PI / 180;
-            var angleB = (start + sectorAngle * (part + 1) / 6) * Math.PI / 180;
+        var parts = Math.max(6, Math.ceil(sectorAngle / 7.5)); // Сохраняем плавную дугу и при 1–3 широких секторах; восемь секторов по-прежнему требуют по шесть частей.
+        for (var part = 0; part < parts; part++) { // Четырёхугольники последовательно заполняют весь угол независимо от чётности числа секторов.
+            var angleA = (start + sectorAngle * part / parts) * Math.PI / 180;
+            var angleB = (start + sectorAngle * (part + 1) / parts) * Math.PI / 180;
             var sinA = Math.sin(angleA), cosA = Math.cos(angleA);
             var sinB = Math.sin(angleB), cosB = Math.cos(angleB);
             Fill.quad(
@@ -193,7 +195,7 @@ exports.create = function(api) {
 
         for (var sector = 0; sector < sectorCount; sector++) {
             var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180; // Получаем угол границы очередного сектора в радианах.
-            if (appearance.lineWidth > 0) { // При нулевой толщине пропускаем линию, сохраняя дальнейшую отрисовку иконки.
+            if (appearance.lineWidth > 0 && sectorCount > 1) { // У единственного сектора нет разделителя; нулевая толщина также скрывает линию, сохраняя отрисовку иконки.
                 Lines.line( // Соединяем точки на внутреннем и внешнем радиусах одной разделительной полосой.
                     centerX + Math.sin(boundary) * innerRadius, // Координата X начала линии у внутреннего круга.
                     centerY + Math.cos(boundary) * innerRadius, // Координата Y начала линии у внутреннего круга.
@@ -281,6 +283,7 @@ exports.create = function(api) {
     return {
         wheelCount: wheelCount, // Общий предел номеров для меню и хранения данных.
         defaultSectorCount: defaultSectorCount, // Исходное число секторов для ещё не настроенного комплекта.
+        maxSectorCount: maxSectorCount, // Редактор и библиотека используют один предел числа видимых секторов.
         getVisual: getVisual, // Открываем доступ к комплекту {appearance, sectorCount} по номеру; данные не копируются.
         getDisplayVisual: getDisplayVisual, // Игровой виджет получает закреплённый либо собственный визуал.
         getSharedVisualNumber: () => sharedVisualNumber, setSharedVisual: setSharedVisual, // Меню читает и переключает замок без обхода всех комплектов.
