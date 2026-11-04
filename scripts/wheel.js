@@ -250,7 +250,7 @@ exports.create = function(api) {
                     return;
                 }
                 var wheelNumber = options.getWheelNumber();
-                var hoveredSector = hoveredSectorAt(this, wheelNumber, options.useSharedVisual); // Наведение учитывает тот же режим закрепления, что и рисование.
+                var hoveredSector = options.getHoveredSector == null ? hoveredSectorAt(this, wheelNumber, options.useSharedVisual) : options.getHoveredSector(); // «Манекен» использует мышь, игровое колесо может передать собственную виртуальную позицию.
                 var selectedSector = options.getSelectedSector == null ? -1 : options.getSelectedSector();
                 draw(this, wheelNumber, hoveredSector, selectedSector, options);
                 if (hoveredSector != -1 && (hoveredSector != previousHoveredSector || wheelNumber != previousWheelNumber)) {
@@ -258,6 +258,7 @@ exports.create = function(api) {
                 }
                 previousHoveredSector = hoveredSector;
                 previousWheelNumber = wheelNumber;
+                if (options.drawCursor != null) options.drawCursor(); // Виртуальный указатель рисуется поверх секторов и иконок, не создавая второго виджета.
             }
         };
         // 'Колесо выбора' заменяет hit для захвата всего экрана.

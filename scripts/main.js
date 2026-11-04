@@ -7,6 +7,7 @@
 var menuModule = require("menu"); // настройки
 var wheelModule = require("wheel"); // 'колесо выбора'
 var uiSounds = require("sounds"); // Загрузка файлов звуков начинается до ClientLoadEvent.
+var relativeModule = require("sdl-relative"); // Подключаем файл, пока загрузчик Mindustry знает текущий мод; FFM создаём после ClientLoadEvent.
 
 // ClientLoadEvent вызывается после загрузки клиентской части игры
 // когда клиентский интерфейс уже создан.
@@ -45,154 +46,77 @@ Events.on(ClientLoadEvent, () => {
     var capturedRight = false;
     var pendingSelection = null; // Запрос выбора, ожидающий выполнения в очереди приложения.
 
-    // ПЕРЕМЕЩЕНИЕ СИСТЕМНОГО КУРСОРА ТОЛЬКО ПРИ НЕОБХОДИМОСТИ
-    var cursorRobot = null, cursorDevice = null, cursorFailed = false, cursorNative = false, cursorFieldX = null, cursorFieldY = null; // Robot и отражённые поля кэшируются, а не создаются на каждом движении.
-    var cursorOriginX = 0, cursorOriginY = 0, cursorScaleX = 1, cursorScaleY = 1; // Начало игрового окна в координатах рабочего стола.
-    var cursorPoint = new Vec2(); // Повторно используем вектор преобразования координат курсора.
-    var motionActive = false; // В обычной игре дополнительные события мыши вообще не направляются в JavaScript мода.
-    var motionProcessor = extend(InputProcessor, {mouseMoved: function(x, y) { return mouseMotion(x, y); }}); // Один обработчик используется только при открытом колесе с ограничением или номером.
+    // ВИРТУАЛЬНЫЙ КУРСОР: ОДНО ЧТЕНИЕ НАКОПИТЕЛЯ SDL НА КАДР
+    var relative = relativeModule.create(); // Проверяем DLL и готовим FFM один раз после загрузки клиента.
+    var virtualActive = false, virtualPosition = new Vec2(), relativeDelta = new Vec2(); // Позиция и смещение переиспользуются всё время работы мода.
+    var cursorPoint = new Vec2(), sampleFrame = -1, motionActive = false; // Дополнительные события мыши подключены только при открытом колесе.
+    var motionProcessor = extend(InputProcessor, {mouseMoved: function(x, y) { return mouseMotion(x, y); }}); // Перехватываем наведение раньше сцены и игрового ввода.
 
-    function setMotionEnabled(enabled) { // Подключаем обработку движения только на время её реальной необходимости.
-        if (motionActive == enabled) return; // Повторное обновление режима не меняет список обработчиков.
-        motionActive = enabled; // Этим же флагом пользуется обработчик перетаскивания.
-        if (enabled) Core.input.getInputMultiplexer().addProcessor(0, motionProcessor); // Ограничение срабатывает до обновления сцены и игрового ввода.
-        else Core.input.removeProcessor(motionProcessor); // Закрытое колесо не добавляет вызовов JavaScript на движения мыши.
+    function setMotionEnabled(enabled) { // Закрытое колесо не получает дополнительных вызовов JavaScript от движения мыши.
+        if (motionActive == enabled) return;
+        motionActive = enabled;
+        if (enabled) Core.input.getInputMultiplexer().addProcessor(0, motionProcessor);
+        else Core.input.removeProcessor(motionProcessor);
     }
 
-    var cursorWindows = null, cursorArena = null, cursorForeignAvailable = null; // Комплектная Java 25 содержит FFM в java.base, даже когда java.awt отсутствует.
-    var cursorCalibrated = false, cursorClipActive = false; // Ограничение ОС включается только для открытого колеса и подготовленного окна.
-    var cursorClipLeft = 0, cursorClipTop = 0, cursorClipRight = 0, cursorClipBottom = 0; // Одинаковый визуал при прокрутке не требует повторной установки той же границы ОС.
-
-    function prepareWindowsCursor() { // Связываем стандартные функции Windows без сторонних DLL и фоновых потоков.
-        var F = Packages.java.lang.foreign; // Эти классы доступны только при фактическом выборе адаптера Java 22+.
-        if (cursorWindows == null) { // Подготовка дескрипторов и памяти выполняется один раз.
-            var linker = F.Linker.nativeLinker(), arena = F.Arena.ofShared(); // Область хранит два небольших буфера для координат окна.
-            var type = name => java.lang.Class.forName(name); // Используем публичные интерфейсы FFM, не закрытые внутренние реализации JDK.
-            var close = type("java.lang.foreign.Arena").getMethod("close", []); // Rhino не может вызывать методы внутренних jdk.internal.foreign-классов напрямую.
-            cursorArena = {close: () => close.invoke(arena, [])}; // Сохраняем корректное закрытие области, включая случай ошибки дальнейшей подготовки.
-            var downcall = type("java.lang.foreign.Linker").getMethod("downcallHandle", [type("java.lang.foreign.MemorySegment"), type("java.lang.foreign.FunctionDescriptor"), type("[Ljava.lang.foreign.Linker$Option;")]); // Кэшируем публичный вход создания нативных дескрипторов.
-            var allocate = type("java.lang.foreign.Arena").getMethod("allocate", [java.lang.Long.TYPE, java.lang.Long.TYPE]); // Выделение памяти также вызывается через публичный интерфейс.
-            var getInt = type("java.lang.foreign.MemorySegment").getMethod("get", [type("java.lang.foreign.ValueLayout$OfInt"), java.lang.Long.TYPE]); // Доступ к полям POINT/RECT нужен только при открытии колеса.
-            var setInt = type("java.lang.foreign.MemorySegment").getMethod("set", [type("java.lang.foreign.ValueLayout$OfInt"), java.lang.Long.TYPE, java.lang.Integer.TYPE]); // Сохраняем публичный метод записи целого числа в буфер.
-            var addressOf = type("java.lang.foreign.MemorySegment").getMethod("address", []); // Нулевой HWND проверяется без доступа к внутреннему классу сегмента.
-            var options = java.lang.reflect.Array.newInstance(type("java.lang.foreign.Linker$Option"), 0); // Дополнительные режимы нативного вызова не нужны.
-            var library = F.SymbolLookup.libraryLookup("user32.dll", arena); // Используем штатную библиотеку Windows.
-            function link(name, result, args) { return downcall.invoke(linker, [library.find(name).orElseThrow(), F.FunctionDescriptor.of(result, args), options]); } // Дескрипторы создаются один раз через публичный интерфейс Linker.
-            var address = F.ValueLayout.ADDRESS, integer = F.ValueLayout.JAVA_INT; // HWND передаётся указателем, BOOL и координаты — 32-битными числами.
-            var four = new java.lang.Long("4"), zero = new java.lang.Long("0"); // Размеры и смещения полей передаются точным Java Long.
-            cursorWindows = {active: link("GetActiveWindow", address, []), client: link("GetClientRect", integer, [address, address]), origin: link("ClientToScreen", integer, [address, address]), move: link("SetCursorPos", integer, [integer, integer]), clip: link("ClipCursor", integer, [address]), nullPointer: F.MemorySegment.NULL, point: allocate.invoke(arena, [new java.lang.Long("8"), four]), rect: allocate.invoke(arena, [new java.lang.Long("16"), four])}; // Буферы POINT и RECT не создаются на каждом движении.
-            cursorWindows.get = (segment, offset) => Number(getInt.invoke(segment, [integer, new java.lang.Long(String(offset))])); // Чтение размеров выполняется только при открытии колеса.
-            cursorWindows.set = (segment, offset, value) => setInt.invoke(segment, [integer, new java.lang.Long(String(offset)), new java.lang.Integer(String(value))]); // Границы ограничения ОС записываются только при открытии или смене размера.
-            cursorWindows.zero = () => { setInt.invoke(cursorWindows.point, [integer, zero, new java.lang.Integer("0")]); setInt.invoke(cursorWindows.point, [integer, four, new java.lang.Integer("0")]); }; // Готовим POINT(0,0) перед переводом в экранные координаты.
-            cursorWindows.isNull = segment => Number(addressOf.invoke(segment, [])) == 0; // Пустое окно не должно приводить к перемещению указателя другого приложения.
-            var objectType = java.lang.Class.forName("java.lang.Object"); // Тип массива аргументов для MethodHandle.
-            cursorWindows.empty = java.lang.reflect.Array.newInstance(objectType, 0); // Повторно используем пустой список GetActiveWindow.
-            cursorWindows.args = java.lang.reflect.Array.newInstance(objectType, 2); // Два аргумента нужны каждой оставшейся функции.
-            cursorWindows.clipArgs = java.lang.reflect.Array.newInstance(objectType, 1); // ClipCursor принимает только указатель на прямоугольник либо NULL для освобождения.
-        }
-        var native = cursorWindows, window = native.active.invokeWithArguments(native.empty); // Активное окно принадлежит текущему SDL-потоку игры.
-        if (native.isNull(window)) return false; // В отсутствие активного окна не перемещаем мышь другого приложения.
-        native.args[0] = window; native.args[1] = native.rect; // Получаем размер клиентской области в координатах того же Windows-контекста.
-        if (Number(native.client.invokeWithArguments(native.args)) == 0) return false; // Не используем устаревшие размеры при ошибке платформы.
-        native.zero(); // Начало клиентской области переводится из (0,0).
-        native.args[1] = native.point; // Тот же массив аргументов обслуживает ClientToScreen.
-        if (Number(native.origin.invokeWithArguments(native.args)) == 0) return false; // Не переносим курсор при неизвестном положении окна.
-        cursorOriginX = native.get(native.point, 0); cursorOriginY = native.get(native.point, 4); // Начало окна в экранных координатах Windows.
-        cursorScaleX = (native.get(native.rect, 8) - native.get(native.rect, 0)) / Core.graphics.getWidth(); // Масштабируем игровые координаты в реальную клиентскую область.
-        cursorScaleY = (native.get(native.rect, 12) - native.get(native.rect, 4)) / Core.graphics.getHeight(); // Отдельный масштаб Y учитывает размер окна и HiDPI.
-        return cursorScaleX > 0 && cursorScaleY > 0; // Свёрнутое окно не предоставляет допустимую область движения.
+    // #ограничить курсор# ГРАНИЦА В КООРДИНАТАХ СЦЕНЫ
+    function cursorLimit() {
+        var radius = wheel.getWidth() / 2, limit = controls.clipOuter ? Math.max(0, radius - 0.01) : Infinity; // Малый допуск защищает выбор сектора от погрешности float.
+        if (controls.clipInner) limit = Math.min(limit, Math.max(0, Math.min(radius - 0.01, radius * wheelView.getDisplayVisual(activeWheelNumber).appearance.innerRadiusRatio + Scl.scl(2)))); // При двух настройках действует меньшая окружность.
+        return limit;
     }
 
-    // ГРАНИЦА ОС УДЕРЖИВАЕТ МЫШЬ В ОКНЕ, ОКРУЖНОСТЬ УТОЧНЯЕТСЯ СОБЫТИЯМИ
-    function releaseCursorClip() { // Освобождаем физическую мышь при любом способе закрытия колеса.
-        if (!cursorClipActive || cursorWindows == null) return; // Выключенная настройка не обращается к Windows.
-        cursorWindows.clipArgs[0] = cursorWindows.nullPointer; // NULL снимает временное ограничение операционной системы.
-        cursorWindows.clip.invokeWithArguments(cursorWindows.clipArgs); // Курсор снова может покидать окно игры.
-        cursorClipActive = false; // Повторное закрытие не создаёт лишних нативных вызовов.
+    function clampPoint(cx, cy, limit, width, height) { // Общая геометрия не обращается к Java на каждом подшаге движения.
+        var dx = virtualPosition.x - cx, dy = virtualPosition.y - cy, length2 = dx * dx + dy * dy;
+        if (length2 > limit * limit) { var scale = limit / Math.sqrt(length2); virtualPosition.set(cx + dx * scale, cy + dy * scale); }
+        virtualPosition.x = Math.max(0, Math.min(width, virtualPosition.x)); // При выключенной окружности указатель остаётся в доступной области интерфейса.
+        virtualPosition.y = Math.max(0, Math.min(height, virtualPosition.y));
     }
 
-    function updateCursorClip() { // Вызывается только при открытии и переключении номера, без покадровой проверки.
-        if (!cursorCalibrated || cursorWindows == null || (!controls.clipOuter && !controls.clipInner)) return; // Другие backend продолжают использовать обработку событий движения.
-        var radius = wheel.getWidth() / 2, appearance = wheelView.getDisplayVisual(activeWheelNumber).appearance; // Выбираем окружность действующего игрового визуала.
-        var limit = controls.clipInner ? Math.min(radius, radius * appearance.innerRadiusRatio + Scl.scl(2)) : radius; // Два включённых ограничения дают меньшую окружность.
-        Core.scene.getViewport().project(cursorPoint.set(wheel.x + radius, wheel.y + wheel.getHeight() / 2)); // Получаем центр в экранных координатах игры.
-        var x = cursorOriginX + cursorPoint.x * cursorScaleX, y = cursorOriginY + (Core.graphics.getHeight() - cursorPoint.y) * cursorScaleY; // Переводим центр в координаты Windows.
-        var rx = (limit + 1) * Core.scene.getViewport().getScreenWidth() / Core.scene.getWidth() * cursorScaleX; // Прямоугольник включает окружность с допуском округления.
-        var ry = (limit + 1) * Core.scene.getViewport().getScreenHeight() / Core.scene.getHeight() * cursorScaleY; // Отдельный масштаб Y поддерживает изменение размеров окна.
-        var left = Math.max(Math.ceil(cursorOriginX), Math.floor(x - rx)), top = Math.max(Math.ceil(cursorOriginY), Math.floor(y - ry)); // Не выпускаем мышь в заголовок или соседние приложения, даже если часть круга обрезана.
-        var right = Math.min(Math.floor(cursorOriginX + Core.graphics.getWidth() * cursorScaleX), Math.ceil(x + rx) + 1), bottom = Math.min(Math.floor(cursorOriginY + Core.graphics.getHeight() * cursorScaleY), Math.ceil(y + ry) + 1); // Правая и нижняя границы RECT исключают следующий пиксель.
-        if (right <= left || bottom <= top) return; // Не задаём пустую область для свёрнутого или слишком маленького окна.
-        if (cursorClipActive && left == cursorClipLeft && top == cursorClipTop && right == cursorClipRight && bottom == cursorClipBottom) return; // Пропускаем запись буфера и нативный вызов, если граница не изменилась.
-        cursorWindows.set(cursorWindows.rect, 0, left); cursorWindows.set(cursorWindows.rect, 4, top); // Левый верхний угол временного прямоугольника.
-        cursorWindows.set(cursorWindows.rect, 8, right); cursorWindows.set(cursorWindows.rect, 12, bottom); // Правый нижний угол временного прямоугольника.
-        cursorWindows.clipArgs[0] = cursorWindows.rect; // Передаём уже выделенный буфер, не создавая новый при переключении.
-        if (Number(cursorWindows.clip.invokeWithArguments(cursorWindows.clipArgs)) != 0) { // ОС удерживает мышь в окне; точная круглая граница остаётся в mouseMoved.
-            cursorClipActive = true; cursorClipLeft = left; cursorClipTop = top; cursorClipRight = right; cursorClipBottom = bottom; // Запоминаем только успешно установленную границу.
-        }
+    function clampVirtual() { // Изменение диаметра ограничивает существующую позицию без скрытого смещения.
+        clampPoint(wheel.x + wheel.getWidth() / 2, wheel.y + wheel.getHeight() / 2, cursorLimit(), Core.scene.getWidth(), Core.scene.getHeight());
     }
 
-    function prepareCursorFields() { // Сразу синхронизируем SDL с физической позицией, не ожидая очередного события операционной системы.
-        if (cursorFieldX != null) return; // Поля ищем только при первом использовании адаптера.
-        var type = Core.input.getClass(); // SDL хранит последнюю позицию в двух собственных полях.
-        cursorFieldX = type.getDeclaredField("mouseX"); cursorFieldY = type.getDeclaredField("mouseY"); // Кэшируем поиск отражённых полей.
-        cursorFieldX.setAccessible(true); cursorFieldY.setAccessible(true); // Обновление кэша понадобится сразу после физического перемещения.
-    }
-
-    function prepareCursor() { // SDL-версия Arc не предоставляет публичный метод установки позиции мыши.
-        if (cursorFailed || Vars.mobile) return false; // На недоступной платформе не повторяем создание Robot при каждом событии.
-        if (typeof Core.input.setCursorPosition == "function") { cursorNative = true; return true; } // Если другой backend предоставляет установку позиции, используем её напрямую.
-        try {
-            if (OS.isWindows) { // В Steam используется урезанная Java без java.desktop; FFM доступен в java.base.
-                if (cursorForeignAvailable == null) { // Наличие API проверяем один раз, не создавая исключения при каждом открытии на старой Java.
-                    try { java.lang.Class.forName("java.lang.foreign.Linker"); cursorForeignAvailable = true; } catch (missingForeign) { cursorForeignAvailable = false; } // Только отсутствие API включает запасной адаптер.
-                }
-                if (cursorForeignAvailable) { prepareCursorFields(); return prepareWindowsCursor(); } // Ошибки Windows-функций сохраняют свою настоящую причину.
+    function moveVirtual(dx, dy) { // #ограничить курсор# Скольжение сохраняет касательную часть движения.
+        var limit = cursorLimit(), radius = wheel.getWidth() / 2, cx = wheel.x + radius, cy = wheel.y + wheel.getHeight() / 2;
+        var width = Core.scene.getWidth(), height = Core.scene.getHeight(), edge2 = Math.pow(Math.max(0, limit - 0.01), 2); // Размеры и допуск вычисляем один раз для всего накопленного движения.
+        var steps = isFinite(limit) ? Math.min(64, Math.max(1, Math.ceil(Math.sqrt(dx * dx + dy * dy) / Math.max(2, limit * 0.15)))) : 1; // Ограниченные подшаги уменьшают зависимость скольжения от частоты кадров.
+        dx /= steps; dy /= steps;
+        for (var i = 0; i < steps; i++) {
+            var sx = dx, sy = dy, px = virtualPosition.x - cx, py = virtualPosition.y - cy, distance2 = px * px + py * py;
+            if (limit > 0 && isFinite(limit) && distance2 > 0 && distance2 >= edge2) { // Допуск учитывает float32 в Vec2; у границы удаляем только направленное наружу движение.
+                var distance = Math.sqrt(distance2), nx = px / distance, ny = py / distance, outward = sx * nx + sy * ny;
+                if (outward > 0) { sx -= nx * outward; sy -= ny * outward; } // Касательное и обратное движение остаются свободными.
             }
-            var pointer = java.awt.MouseInfo.getPointerInfo(), device = pointer.getDevice(); // Определяем монитор и положение мыши один раз при открытии.
-            if (cursorRobot == null || !device.equals(cursorDevice)) { cursorRobot = new java.awt.Robot(device); cursorDevice = device; } // При переносе игры на другой монитор учитываем его собственный масштаб рабочего стола.
-            prepareCursorFields(); // Другие полные desktop-JRE используют AWT с тем же кэшем SDL.
-            var transform = pointer.getDevice().getDefaultConfiguration().getDefaultTransform(); // Учитываем масштаб рабочего стола на текущем мониторе.
-            cursorScaleX = transform.getScaleX(); cursorScaleY = transform.getScaleY(); // SDL использует экранные пиксели, Robot — координаты Java рабочего стола.
-            var position = pointer.getLocation(); // Начало окна вычисляем по разности абсолютной и игровой позиции.
-            cursorOriginX = position.x - Core.input.mouseX() / cursorScaleX; // Горизонтальное начало клиентской области.
-            cursorOriginY = position.y - (Core.graphics.getHeight() - Core.input.mouseY()) / cursorScaleY; // Рабочий стол отсчитывает Y сверху, игра — снизу.
-            return true; // Последующие события используют готовые смещения без MouseInfo и новых объектов.
-        } catch (error) {
-            if (cursorArena != null) { cursorArena.close(); cursorArena = null; cursorWindows = null; } // Не оставляем выделенную память после ошибки подготовки адаптера.
-            cursorFailed = true; // Повторяющаяся ошибка платформы не должна нагружать обработку мыши.
-            Log.warn("BuildWheel: перемещение системного курсора недоступно: @", String(error)); // Один раз оставляем точную причину в журнале игры.
-            return false;
+            virtualPosition.add(sx, sy); clampPoint(cx, cy, limit, width, height); // Сохраняем ограниченную точку после каждого шага.
         }
     }
 
-    function moveCursor(stageX, stageY, deferScene) { // Получаем целевую позицию в координатах сцены интерфейса.
-        if (!cursorCalibrated || (!cursorNative && cursorRobot == null && cursorWindows == null) || cursorFailed) return false; // Обычная работа без сдвига вообще не обращается к операционной системе.
-        Core.scene.getViewport().project(cursorPoint.set(stageX, stageY)); // Преобразуем позицию обратно в экранные координаты без инверсии Y метода stageToScreenCoordinates.
-        var x = Math.round(cursorPoint.x), y = Math.round(cursorPoint.y); // Целые координаты соответствуют позиции аппаратной мыши.
-        if (x == Core.input.mouseX() && y == Core.input.mouseY()) { if (!deferScene) Core.scene.mouseMoved(x, y); return true; } // Не просим ОС повторить уже достигнутую позицию из-за пиксельного округления.
-        if (cursorNative) Core.input.setCursorPosition(x, y); // Backend сам обновляет физическую позицию и кэш координат.
-        else { // Для установленного SDL-клиента используем адаптер операционной системы.
-            if (cursorWindows != null) { // Windows-функция использует тот же контекст координат, что GetClientRect и ClientToScreen.
-                cursorWindows.args[0] = new java.lang.Integer(String(Math.round(cursorOriginX + x * cursorScaleX))); // Передаём точный C-int, а не JS Double.
-                cursorWindows.args[1] = new java.lang.Integer(String(Math.round(cursorOriginY + (Core.graphics.getHeight() - y) * cursorScaleY))); // Windows отсчитывает вертикальную позицию сверху.
-                if (Number(cursorWindows.move.invokeWithArguments(cursorWindows.args)) == 0) return false; // Ошибка ОС не должна обновлять только виртуальную позицию мыши.
-            } else cursorRobot.mouseMove(Math.round(cursorOriginX + x / cursorScaleX), Math.round(cursorOriginY + (Core.graphics.getHeight() - y) / cursorScaleY)); // Полная desktop-JRE использует координаты Java рабочего стола.
-            cursorFieldX.setInt(Core.input, x); cursorFieldY.setInt(Core.input, y); // Наведение сразу читает новую позицию, не ожидая синтетического события SDL.
-        }
-        if (!deferScene) Core.scene.mouseMoved(x, y); // При открытии откладываем наведение до появления колеса, чтобы сдвиг не передал фокус перекрываемому HUD.
-        return true;
+    function sampleRelative() { // Вызывается до выбора по клику и перед рисованием, после обработки очереди SDL.
+        if (!wheelOpen || !virtualActive) return;
+        if (!windowFocused || !Vars.state.isGame() || wheelInputBlocked()) { closeWheel(); return; } // Чужое окно и потеря фокуса освобождают режим даже без движения мыши.
+        var frame = Core.graphics.getFrameId();
+        if (sampleFrame == frame) return; // GetRelativeMouseState обнуляет накопитель, поэтому читаем его только один раз.
+        sampleFrame = frame;
+        var sampled;
+        try { sampled = relative.sample(relativeDelta); } catch (error) { closeWheel(); Log.warn("BuildWheel SDL: @", String(error)); return; } // Неожиданное исключение адаптера также освобождает режим.
+        if (!sampled) { closeWheel(); return; } // Ошибка SDL не оставляет колесо со скрытым указателем.
+        if (relativeDelta.x == 0 && relativeDelta.y == 0) return;
+        if (numberBadge.visible) hideWheelNumber(); // Учитываем настоящее движение, включая движение у края окна.
+        var viewport = Core.scene.getViewport(); // Чувствительность выбрана как один логический пиксель на единицу SDL.
+        moveVirtual(relativeDelta.x * viewport.getWorldWidth() / viewport.getScreenWidth(), -relativeDelta.y * viewport.getWorldHeight() / viewport.getScreenHeight()); // Меняем направление Y один раз; масштаб UI повторно не применяем.
     }
 
-    function constrainCursor(screenX, screenY) { // Проверяем границу только при поступлении события движения мыши.
-        if (!wheelOpen || (!controls.clipOuter && !controls.clipInner) || wheelInputBlocked()) return false; // При выключенных ограничениях нет ни преобразований, ни вычисления расстояния.
-        Core.scene.screenToStageCoordinates(cursorPoint.set(screenX, screenY)); // Получаем позицию события относительно сцены.
-        var radius = wheel.getWidth() / 2, appearance = wheelView.getDisplayVisual(activeWheelNumber).appearance; // Ограничение соответствует реальному игровому визуалу.
-        var limit = controls.clipInner ? Math.min(radius, radius * appearance.innerRadiusRatio + Scl.scl(2)) : radius; // Внутренняя граница оставляет два UI-пикселя для попадания в строительный сектор.
-        var centerX = wheel.x + radius, centerY = wheel.y + wheel.getHeight() / 2; // Центр остаётся прежним при переключении колёс.
-        var dx = cursorPoint.x - centerX, dy = cursorPoint.y - centerY, distance2 = dx * dx + dy * dy; // Квадрат расстояния позволяет не вычислять корень внутри допустимой области.
-        if (distance2 <= (limit + 1) * (limit + 1)) return false; // Один пиксель по радиусу покрывает округление обеих координат и исключает цепочку одинаковых синтетических событий.
-        var scale = limit / Math.sqrt(distance2); // Корень нужен только если курсор действительно вышел за окружность.
-        return moveCursor(centerX + dx * scale, centerY + dy * scale); // Проецируем позицию на окружность, не меняя направления выбора сектора.
+    function pointerPosition(out) { // Выбор и подсветка используют один источник координат.
+        if (virtualActive) return out.set(virtualPosition);
+        return Core.scene.screenToStageCoordinates(out.set(Core.input.mouseX(), Core.input.mouseY())); // Неподдерживаемый backend сохраняет обычную мышь без прежнего ограничителя.
+    }
+
+    function drawVirtualCursor() { // Контрастная стрелка рисуется поверх секторов и иконок существующего колеса.
+        if (!virtualActive || (numberBadge.visible && virtualPosition.x >= numberBadge.x && virtualPosition.x <= numberBadge.getRight() && virtualPosition.y >= numberBadge.y && virtualPosition.y <= numberBadge.getTop())) return; // Номер закрывает указатель только в своей области.
+        var x = virtualPosition.x, y = virtualPosition.y, size = Scl.scl(9);
+        Draw.color(Color.black); Fill.tri(x - 1, y + 1, x + size * 0.35, y - size - 2, x + size + 2, y - size * 0.35);
+        Draw.color(Color.white); Fill.tri(x, y, x + size * 0.35, y - size * 0.8, x + size * 0.8, y - size * 0.35); Draw.reset(); // Не передаём цвет следующим элементам интерфейса.
     }
 
     // Определяем наличие курсора на одном из секторов (в wheel.js). Принимает координаты сцены интерфейса, возвращает сектор 0–7 или -1.
@@ -216,6 +140,8 @@ Events.on(ClientLoadEvent, () => {
     //==============================================================
     // Общая фабрика создаёт Element. Здесь задаём только поведение 'колеса выбора'.
     var wheel = wheelView.createElement({
+        getHoveredSector: function() { pointerPosition(mousePosition); return sectorAt(mousePosition.x, mousePosition.y); }, // Подсветка и выбор по клику используют одну виртуальную позицию.
+        drawCursor: drawVirtualCursor, // «Манекен» продолжает рисоваться без виртуального указателя.
         useSharedVisual: true, // Игровое колесо использует закреплённый визуал, если замок включён.
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
@@ -254,7 +180,7 @@ Events.on(ClientLoadEvent, () => {
         numberBadge.visible = false; // Скрытая плашка не рисуется и не обновляется.
         numberBadge.remove(); // Выключенная плашка отсутствует в сцене и не участвует даже в штатном обходе UI.
         if (numberCursorHidden) { Core.graphics.restoreCursor(); numberCursorHidden = false; } // Возвращаем аппаратный курсор, если номер перекрывал его в центре.
-        setMotionEnabled(wheelOpen && (controls.clipOuter || controls.clipInner)); // Без номера оставляем обработчик только при действующем ограничении окружностью.
+        setMotionEnabled(wheelOpen && virtualActive); // Относительные события остаются захваченными до закрытия колеса.
     }
 
     function showWheelNumber() { // Рисуем только для настоящего «колеса выбора», не для «манекена».
@@ -269,7 +195,7 @@ Events.on(ClientLoadEvent, () => {
         setMotionEnabled(true); // Первое движение уберёт номер; при выключенных ограничениях обработчик затем будет удалён.
         numberAnchorX = Core.input.mouseX(); numberAnchorY = Core.input.mouseY(); // Синтетическое перемещение в эту же позицию не считается движением пользователя.
         Core.scene.screenToStageCoordinates(cursorPoint.set(numberAnchorX, numberAnchorY)); // Проверяем, накладывается ли аппаратная мышь на плашку.
-        if (!numberCursorUnavailable && cursorPoint.x >= numberBadge.x && cursorPoint.x <= numberBadge.getRight() && cursorPoint.y >= numberBadge.y && cursorPoint.y <= numberBadge.getTop()) { // Курсор вне плашки скрывать незачем.
+        if (!virtualActive && !numberCursorUnavailable && cursorPoint.x >= numberBadge.x && cursorPoint.x <= numberBadge.getRight() && cursorPoint.y >= numberBadge.y && cursorPoint.y <= numberBadge.getTop()) { // В relative mode указатель уже скрыт самим SDL; этот путь нужен только обычной мыши.
             try {
                 if (invisibleCursor == null) { // Единственный прозрачный курсор создаём только при первом использовании настройки.
                     var pixel = new Pixmap(1, 1); pixel.fill(0); // Аппаратный курсор находится выше OpenGL; прозрачность позволяет цифре оставаться поверх него.
@@ -283,21 +209,24 @@ Events.on(ClientLoadEvent, () => {
         }
     }
 
-    function mouseMotion(screenX, screenY) { // Одна проверка обслуживает mouseMoved и touchDragged.
+    function mouseMotion(screenX, screenY) { // Одна проверка обслуживает mouseMoved и touchDragged. #ограничить курсор#
+        if (virtualActive) { sampleRelative(); return true; } // Внутри режима движение получает только BuildWheel.
         if (numberBadge.visible && (screenX != numberAnchorX || screenY != numberAnchorY)) hideWheelNumber(); // Даже небольшое реальное движение сразу убирает номер.
-        return constrainCursor(screenX, screenY); // Ограничение выполняется только при включённых параметрах и открытом колесе.
+        return false; // Неподдерживаемая платформа сохраняет обычное наведение.
     }
     Events.on(DisposeEvent, () => { // Освобождаем нативные ресурсы один раз при завершении игры.
         closeWheel(); // Сначала снимаем ограничение ОС и возвращаем обычный курсор.
         if (invisibleCursor != null) { invisibleCursor.dispose(); invisibleCursor = null; } // Повторное событие не должно освобождать тот же аппаратный курсор дважды.
-        if (cursorArena != null) { cursorArena.close(); cursorArena = null; cursorWindows = null; } // Закрываем область памяти вместе с дескрипторами Windows-функций.
+        relative.dispose(); // Закрываем FFM-память только после отключения своего режима SDL.
     });
     //==============================================================
 
     //Закрытие колеса при выходе в меню или сбросе мира.
     function closeWheel() {
         wheelOpen = false; // Закрытие сначала отключает обработку движения, даже если до этого был показан номер.
-        releaseCursorClip(); cursorCalibrated = false; // Закрытое колесо не ограничивает физическую мышь.
+        wheel.update(null); virtualActive = false; // Сначала прекращаем чтение накопителя и отображение виртуального указателя.
+        try { relative.end(); } catch (error) { Log.err("BuildWheel: ошибка освобождения SDL: @", String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
+        setMotionEnabled(false); // Убираем обработчик наведения из цепочки ввода.
         hideWheelNumber(); // Номер и временно скрытый курсор не должны оставаться после выбора, отмены или открытия окна.
         wheel.resetHoverSound(); // Повторное открытие начинает новую историю звука наведения.
         activeWheelNumber = -1;
@@ -314,33 +243,32 @@ Events.on(ClientLoadEvent, () => {
         wheel.setPosition(centerX - diameter / 2, centerY - diameter / 2); // Сохраняем центр, даже если соседнее колесо больше или меньше предыдущего.
         activeWheelNumber = number; // Рисование и выбор блока теперь используют комплект и слоты этого номера.
         wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
-        if (wheelOpen && !opening) { updateCursorClip(); constrainCursor(Core.input.mouseX(), Core.input.mouseY()); showWheelNumber(); } // Новый размер применяется к ограничениям до появления номера.
+        if (wheelOpen && !opening) { if (virtualActive) clampVirtual(); showWheelNumber(); } // Новый размер применяется к виртуальной позиции до появления номера.
     }
 
     // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
     function openWheel(number) { // Общая функция для назначенных клавиш и переключения прокруткой.
-        releaseCursorClip(); cursorCalibrated = false; // Прежняя окружность не должна мешать переносу центра нового открытия.
+        if (wheelOpen && virtualActive) { sampleRelative(); if (wheelOpen) setWheelNumber(number, false); return; } // Смена номера сохраняет центр и уже захваченный режим.
         mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); //координаты мыши
         Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
         setWheelNumber(number, true); // Выбираем данные и диаметр именно открываемого номера.
+        var nativeReady = relative.available; // Другая платформа сохраняет обычный выбор; занятый или потерянный захват не забираем.
+        try { virtualActive = relative.begin(); } catch (error) { closeWheel(); Log.warn("BuildWheel SDL: @", String(error)); return; } // Ошибка входа не должна оставлять частично захваченный режим.
+        if ((nativeReady || relative.active) && !virtualActive) { closeWheel(); return; } // При ошибке входа или чужом relative mode отменяем именно это открытие.
         var margin = wheel.getWidth() / 2 * controls.edgeShift; // При нуле сдвига нет, при единице отступ от каждого края равен радиусу.
-        var oldX = mousePosition.x, oldY = mousePosition.y; // Исходная позиция нужна только для проверки необходимости переноса курсора.
-        var needsCursor = controls.clipOuter || controls.clipInner || (margin > 0 && (oldX < margin || oldY < margin || oldX > Core.scene.getWidth() - margin || oldY > Core.scene.getHeight() - margin)); // Адаптер создаётся только при реальной необходимости.
-        var cursorReady = needsCursor && prepareCursor(); // Обычное открытие вдали от краёв не обращается к операционной системе.
-        cursorCalibrated = cursorReady; // Не используем координаты окна, если его не удалось подготовить.
-        if (margin > 0 && cursorReady) { // Центр и физический курсор сдвигаются вместе.
-            mousePosition.x = Core.scene.getWidth() < margin * 2 ? Core.scene.getWidth() / 2 : Math.max(margin, Math.min(Core.scene.getWidth() - margin, oldX)); // Если колесо слишком широко, выбираем середину доступной области.
-            mousePosition.y = Core.scene.getHeight() < margin * 2 ? Core.scene.getHeight() / 2 : Math.max(margin, Math.min(Core.scene.getHeight() - margin, oldY)); // Аналогично обрабатываем верхний и нижний края.
-            if ((mousePosition.x != oldX || mousePosition.y != oldY) && !moveCursor(mousePosition.x, mousePosition.y, true)) mousePosition.set(oldX, oldY); // Если ОС отклонила перенос, центр остаётся под фактическим курсором.
+        if (margin > 0 && virtualActive) { // Сдвигаем центр и виртуальную позицию, не перемещая системную мышь.
+            mousePosition.x = Core.scene.getWidth() < margin * 2 ? Core.scene.getWidth() / 2 : Math.max(margin, Math.min(Core.scene.getWidth() - margin, mousePosition.x)); // Если колесо слишком широко, выбираем середину доступной области.
+            mousePosition.y = Core.scene.getHeight() < margin * 2 ? Core.scene.getHeight() / 2 : Math.max(margin, Math.min(Core.scene.getHeight() - margin, mousePosition.y)); // Аналогично обрабатываем верхний и нижний края.
         }
-        wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под курсором; у края экрана часть круга может обрезаться.
+        wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под выбранной точкой открытия.
+        virtualPosition.set(mousePosition); sampleFrame = Core.graphics.getFrameId(); // Входной накопитель уже очищен, старые события этого кадра не смещают указатель.
         //* Позиция фиксируется в момент открытия и не следует за мышью.
-        //* У края экрана круг может обрезаться: центр остаётся под курсором.
+        //* При выключенном сдвиге у края экрана круг может обрезаться.
         wheelScrollAmount = 0; // Каждое открытие начинает отсчёт прокрутки с целого шага.
         wheelOpen = true; // Разрешаем отрисовку и выбор сектора.
         wheel.visible = true; //Включаем отрисовку колеса, чтобы оно отрисовывалось в draw() и было доступно для клика мышью.
         wheel.toFront(); // Перемещаем wheel в конец корневой группы, чтобы он рисовался поверх остальных элементов интерфейса.
-        updateCursorClip(); constrainCursor(Core.input.mouseX(), Core.input.mouseY()); // Ограничение действует только после установки окончательного центра и размера колеса.
+        if (virtualActive) { clampVirtual(); wheel.update(sampleRelative); setMotionEnabled(true); } // Чтение накопителя и проверка состояния работают только у открытого колеса.
         Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); // Наведение теперь получает само открытое колесо, а не HUD под ним.
         showWheelNumber(); // После сдвига колеса плашка и запомненная позиция мыши используют окончательный центр.
     }
@@ -379,6 +307,7 @@ Events.on(ClientLoadEvent, () => {
     // ПЕРЕХВАТ ЦИФРОВОГО ВЫБОРА КАТЕГОРИЙ И БЛОКОВ ИГРЫ
     var blockedNumberBindings = [Binding.blockSelect01, Binding.blockSelect02, Binding.blockSelect03, Binding.blockSelect04, Binding.blockSelect05, Binding.blockSelect06, Binding.blockSelect07, Binding.blockSelect08, Binding.blockSelect09, Binding.blockSelect10]; // Используем текущие игровые назначения, не перезаписывая их в настройках Mindustry.
     var capturedKeys = []; // Отпускание перехваченной клавиши также не передаётся игре.
+    function resetCapturedInput() { capturedLeft = false; capturedRight = false; capturedKeys = []; scrollHeldKey = KeyCode.unset; wheelScrollAmount = 0; } // Потерянное вне окна отпускание не должно блокировать следующие открытия.
     function blockNumberKey(key) { // Проверяется только в событиях нажатия, без опроса каждого кадра.
         if (!controls.disableNumberKeys || !Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return false; // Поля ввода и окна игры получают цифры как обычно.
         for (var i = 0; i < blockedNumberBindings.length; i++) { // Всего десять действий; пользовательские переназначения учитываются сразу.
@@ -496,12 +425,12 @@ Events.on(ClientLoadEvent, () => {
     }
 
     Events.on(StateChangeEvent, event => { //о выходе в меню
-        if (event.to == GameState.State.menu) closeWheel(); // сброс колеса
+        if (event.to == GameState.State.menu) { closeWheel(); resetCapturedInput(); } // сброс колеса
     });
-    Events.on(ResetEvent, () => closeWheel()); // Сброс мира - сброс колеса
-    Events.on(ResizeEvent, () => closeWheel()); // При изменении размеров окна закрываем колесо с прежней калибровкой системного курсора.
+    Events.on(ResetEvent, () => { closeWheel(); resetCapturedInput(); }); // Сброс мира - сброс колеса
+    Events.on(ResizeEvent, () => closeWheel()); // При изменении размеров окна освобождаем режим с прежним масштабом координат.
     Core.app.addListener(extend(ApplicationListener, { // Потеря фокуса окна является отдельным событием приложения, а не покадровой проверкой.
-        pause: function() { windowFocused = false; closeWheel(); scrollHeldKey = KeyCode.unset; }, // Возвращаем курсор и прекращаем захват прокрутки при переключении в другое приложение.
+        pause: function() { windowFocused = false; closeWheel(); resetCapturedInput(); }, // Возвращаем курсор и прекращаем захват прокрутки при переключении в другое приложение.
         resume: function() { windowFocused = true; } // Возобновляем реакцию на новые события после возвращения в игру.
     }));
 
@@ -523,6 +452,7 @@ Events.on(ClientLoadEvent, () => {
 
         // ПЕРЕКЛЮЧЕНИЕ НОМЕРОВ ПРОКРУТКОЙ БЕЗ МАСШТАБИРОВАНИЯ КАРТЫ
         scrolled: function(amountX, amountY) { // Arc передаёт прокрутку вперёд отрицательным amountY, назад — положительным.
+            if (virtualActive && scrollHeldKey == KeyCode.unset) return true; // Виртуальное колесо не передаёт прокрутку карте или чужому HUD.
             if (scrollHeldKey == KeyCode.unset || !Vars.state.isGame()) return false; // Обычную прокрутку без удержания назначенной клавиши и в главном меню не перехватываем.
             if (wheelInputBlocked()) { // Диалоги, ввод текста и выделение области сохраняют приоритет перед колесом.
                 closeWheel(); // Закрываем колесо, если другое окно успело появиться перед событием прокрутки.
@@ -548,7 +478,10 @@ Events.on(ClientLoadEvent, () => {
             if (handleHotkey(button)) return true; // Любое собственное действие, включая открытие меню, может быть назначено на кнопку мыши.
             // 2.4) Действие из списка также может быть назначено на кнопку мыши.
             // Уже захваченный жест по-прежнему удерживаем до его отпускания.
-            if (button != KeyCode.mouseLeft && button != KeyCode.mouseRight) return false;
+            if (button != KeyCode.mouseLeft && button != KeyCode.mouseRight) { // Неназначенные дополнительные кнопки не должны уходить в мир за виртуальным курсором.
+                if (virtualActive && wheelOpen && !wheelInputBlocked()) { capturedKeys[button.ordinal()] = true; return true; } // Отпускание этой же кнопки поглотит существующий обработчик capturedKeys.
+                return false;
+            }
 
             // Дополнительную кнопку во время уже захваченного жеста тоже
             // поглощаем, чтобы закрытие не превратилось в действие игры.
@@ -565,8 +498,9 @@ Events.on(ClientLoadEvent, () => {
             if (wheelOpen) {
                 var selectedBlock = null;
                 if (button == KeyCode.mouseLeft) {
-                    mousePosition.set(screenX, screenY);
-                    Core.scene.screenToStageCoordinates(mousePosition);
+                    sampleRelative();
+                    if (!wheelOpen) return true; // Ошибка чтения или потеря фокуса отменяет выбор.
+                    pointerPosition(mousePosition);
                     var sector = sectorAt(mousePosition.x, mousePosition.y);
                     var block = sector == -1 ? null : wheelSlots[activeWheelNumber][sector];
                     if (canSelectBlock(block)) selectedBlock = block;
