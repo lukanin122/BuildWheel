@@ -1,15 +1,17 @@
 // Загружается через require вместе со скриптами, ДО ClientLoadEvent.
-// FileTree ставит эти четыре файла в очередь общего загрузчика игры; остальные звуки папки не используем.
+// FileTree ставит используемые файлы в очередь общего загрузчика игры; остальные звуки папки не используем.
 "use strict";
 
 exports.addBlock = Vars.tree.loadSound("add_block_1");
 exports.deleteBlock = Vars.tree.loadSound("delete_block_1");
 exports.sectorHover = Vars.tree.loadSound("sector_hover_1");
 exports.sectorSelect = Vars.tree.loadSound("sector_select_1");
+exports.wheelOpen = Vars.tree.loadSound("wheel_open_1");
 if (!Vars.headless) exports.sectorHover.setMinInterval(0); // Не пропускаем быстрые переходы; на сервере не меняем общий Sounds.none.
 
-exports.play = function(sound) {
-    sound.play(Vars.control.sound.uiBus); // Канал UI без мирового затухания; play учитывает общую громкость звуковых эффектов.
+exports.play = function(sound, pitch) {
+    if (pitch == null && sound !== exports.wheelOpen) sound.play(Vars.control.sound.uiBus); // Прежние звуки сохраняют штатный вызов и его параметры.
+    else sound.play(Core.audio.sfxVolume, pitch == null ? 1 : pitch, 0, false, sound !== exports.wheelOpen, Vars.control.sound.uiBus); // Меняем только pitch; открытие не ограничиваем по частоте, чтобы быстрые смены номера тоже звучали.
 };
 
 var silentClick = new java.lang.Runnable({run: function() {}});

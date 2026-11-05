@@ -234,8 +234,8 @@ Events.on(ClientLoadEvent, () => {
     }
 
     function showWheelNumber() { // Рисуем только для настоящего «колеса выбора», не для «манекена».
-        hideWheelNumber(); // Предыдущее появление не должно оставлять скрытый системный курсор.
-        if (!controls.showNumber || !wheelOpen) return; // Выключенная настройка не создаёт курсоров и надписи.
+        numberBadge.clearActions(); numberHideQueued = false; // Обновляем номер без промежуточного показа аппаратного курсора.
+        if (!controls.showNumber || !wheelOpen) { hideWheelNumber(); return; } // Выключенная настройка не оставляет скрытый курсор или надпись.
         numberLabel.setText(String(activeWheelNumber)); numberLabel.setColor(controls.numberColor); // Используем выбранный пользователем цвет текста.
         var radius = wheel.getWidth() / 2, innerRadius = radius * wheelView.getDisplayVisual(activeWheelNumber).appearance.innerRadiusRatio;
         var font = numberLabel.getStyle().font, capHeight = font.getCapHeight() / font.getData().scaleY; // Получаем высоту заглавного символа при масштабе шрифта 1, не меняя общий Font.
@@ -294,6 +294,12 @@ Events.on(ClientLoadEvent, () => {
     }
 
     // ПЕРЕКЛЮЧЕНИЕ КОМПЛЕКТА БЕЗ СМЕЩЕНИЯ ЦЕНТРА КОЛЕСА
+    function playWheelOpen() { // Порядок звука совпадает с клавиатурой: 1–9, затем 0.
+        if (!wheelOpen) return; // Чужое окно могло отменить открытие во время обновления наведения.
+        var order = activeWheelNumber == 0 ? wheelCount - 1 : activeWheelNumber - 1;
+        uiSounds.play(uiSounds.wheelOpen, controls.wheelOpenPitch ? 1.06 - 0.12 * order / (wheelCount - 1) : 1); // Меняем высоту тона линейно; громкость и канал остаются в sounds.js.
+    }
+
     function setWheelNumber(number, opening) { // Используется при открытии и переключении прокруткой.
         var diameter = wheelView.getDisplayVisual(number).appearance.diameter; // Читаем диаметр действующего визуала с учётом закрепления замком.
         var centerX = wheel.x + wheel.getWidth() / 2, centerY = wheel.y + wheel.getHeight() / 2; // Запоминаем прежний центр перед изменением размеров.
@@ -301,7 +307,7 @@ Events.on(ClientLoadEvent, () => {
         wheel.setPosition(centerX - diameter / 2, centerY - diameter / 2); // Сохраняем центр, даже если соседнее колесо больше или меньше предыдущего.
         activeWheelNumber = number; // Рисование и выбор блока теперь используют комплект и слоты этого номера.
         wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
-        if (wheelOpen && !opening) { if (virtualActive) clampVirtual(); showWheelNumber(); } // Новый размер применяется к виртуальной позиции до появления номера.
+        if (wheelOpen && !opening) { if (virtualActive) clampVirtual(); showWheelNumber(); playWheelOpen(); } // При смене номера сохраняем захват, обновляем надпись и проигрываем открытие нового колеса.
     }
 
     // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
@@ -332,6 +338,7 @@ Events.on(ClientLoadEvent, () => {
         if (virtualActive) { previousOuter = controls.clipOuter; previousInner = controls.clipInner; previousRatio = wheelView.getDisplayVisual(activeWheelNumber).appearance.innerRadiusRatio; clampVirtual(); setMotionEnabled(true); } // Ограничения включаются лишь при действительно захваченном режиме.
         Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); // Наведение теперь получает само открытое колесо, а не HUD под ним.
         showWheelNumber(); // После сдвига колеса плашка и запомненная позиция мыши используют окончательный центр.
+        playWheelOpen(); // Звук относится к успешно открытому колесу; отказ захвата сюда не доходит.
     }
 
     //==============================================================

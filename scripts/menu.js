@@ -3,7 +3,7 @@
 // API виджетов: https://github.com/Anuken/Arc/tree/master/arc-core/src/arc/scene/ui
 // Категории и иконки: mindustry.ui.fragments.PlacementFragment версии игры.
 "use strict"; // В частности, запрещает случайное присваивание не объявленной переменной.
-var uiSounds = require("sounds"); // Общий модуль уже загружает только четыре используемых звука.
+var uiSounds = require("sounds"); // Общий модуль загружает используемые звуки интерфейса.
 var appearanceMenuModule = require("appearance-menu"); // Подключаем модуль полей внешнего вида «колеса выбора» и «манекена».
 var paletteModule = require("palette"); // Подключаем отдельное окно палитры, которое копирует выбранный цвет в буфер обмена.
 var libraryModule = require("wheel-library"); // Хранилище независимых снимков четырёх типов.
@@ -15,7 +15,7 @@ var controlsCache = null; // Один набор настроек использ
 exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
     if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
     var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
-    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
+    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false, wheelOpenPitch: true}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
     for (var key in controls) { // Читаем переключатели и долю сдвига только при создании набора.
         try {
             if (key == "edgeShift") { // Единственное дробное значение задаёт отступ от краёв экрана.
@@ -114,14 +114,15 @@ exports.create = function(api) {
     });
 
     // ШТАТНЫЕ ПОДСКАЗКИ НАСТРОЕК И ПРИВЯЗКА К ЛЕВОМУ КРАЮ ЭЛЕМЕНТА
-    function addTooltip(element, text, keepWhite) { // Оформление берём из игры, а для левого списка сохраняем прежний белый текст.
+    function addTooltip(element, text, keepWhite, maxWidth) { // Оформление берём из игры; необязательная ширина задаётся в UI-единицах.
         Vars.ui.addDescTooltip(element, text); // Родной метод уже показывает описание под началом элемента на полупрозрачном фоне.
         var container = element.getListeners().peek().getContainer(); // Получаем только что созданную игрой подсказку.
         var cell = container.getCells().first(), label = cell.get(); // Штатное описание содержит одну надпись в таблице.
         if (keepWhite) label.setColor(Color.white); // Блоки, кампании и категории сохраняют прежнее оформление обычных игровых подсказок.
         var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Ограничиваем ширину описания размером экрана.
+        if (maxWidth != null) available = Math.min(available, Math.max(1, Scl.scl(maxWidth) - container.getMarginLeft() - container.getMarginRight())); // Подсказки левых настроек помещаются в ширину своей панели.
         if (label.getPrefWidth() > available) { // Длинное название не должно выходить за экран целиком.
-            cell.width(available); label.setWrap(true); // Переносим текст самого Label без изменения его цвета или размера.
+            cell.width(available / Scl.scl()); label.setWrap(true); // Cell применяет Scl самостоятельно; переводим ширину обратно в UI-единицы и включаем перенос.
         }
         container.update(() => container.keepInStage()); // При нехватке места сдвигаем показанную подсказку внутрь экрана.
     }
@@ -539,6 +540,9 @@ exports.create = function(api) {
     var keySize = 40, keyWide = keySize * 2.5, keySpace = keySize + 4; // Цифровая кнопка квадратная; ячейка учитывает зазор 4, широкая кнопка в 2,5 раза длиннее.
     var resetSpace = keySize / 2 - 4; // Вместе с правым отступом предыдущей кнопки получаем перед сбросом ровно половину её ширины.
     var keyStyle = null; // Один прозрачный стиль используется всеми кнопками назначения клавиш.
+    var controlTooltipWidth = 0; // Ширина описаний левых настроек обновляется при построении формы под текущее окно.
+
+    function addControlTooltip(element, text) { addTooltip(element, text, false, controlTooltipWidth); } // Общий стиль подсказок с ограничением по ширине левой панели.
 
     function controlLabel(row, title, width) { // Одинаковое место для подписей всех левых настроек.
         var label = row.add(title).width(width).minHeight(44).left().get(); // Длинная подпись получает место слева от колонки управления.
@@ -568,7 +572,7 @@ exports.create = function(api) {
         toggle.setChecked(controls[key]); // Начальное состояние читаем из общего набора.
         toggle.changed(() => { controls.set(key, toggle.isChecked()); if (key == "paletteInMenu") refreshDatabaseButtons(); settingsChanged = true; }); // Обновляем поведение и, при необходимости, состав «Базы данных».
         row.add(toggle).size(44).left(); // Не растягиваем checkbox до правого края панели.
-        if (tooltip != null) addTooltip(toggle, tooltip); // Подсказка получает прежний штатный серый стиль.
+        if (tooltip != null) addControlTooltip(toggle, tooltip); // Подсказка получает прежний штатный серый стиль и ширину своей панели.
     }
 
     // ПРОЗРАЧНЫЕ КНОПКИ КЛАВИШ И ЦВЕТНОЕ ПОДЧЁРКИВАНИЕ HEX
@@ -632,7 +636,7 @@ exports.create = function(api) {
         button.getLabel().setEllipsis(true); // Длинное английское название не перекрывает соседние кнопки.
         button.getLabelCell().minWidth(0); // Разрешаем узкой цифровой кнопке сократить длинное имя клавиши.
         bindingButtons.push({binding: bind, button: button, empty: empty}); // Для обновления не нужен update-обработчик.
-        if (tooltip != null) addTooltip(button, tooltip); // Например, «Колесо 1» сохраняет смысл при назначении другой клавиши.
+        if (tooltip != null) addControlTooltip(button, tooltip); // Например, «Колесо 1» сохраняет смысл при назначении другой клавиши.
     }
 
     function resetBindings(binds) { // Сбрасываем только выбранную комбинацию, а не все назначения игры.
@@ -642,7 +646,7 @@ exports.create = function(api) {
 
     function resetKeyButton(table, binds, name) { // Кнопки сброса имеют тот же размер и одинаковое поведение во всех строках клавиш.
         var button = table.button(Icon.refresh, Styles.cleari, () => resetBindings(binds)).size(keySize).padTop(2).padBottom(2).padRight(4).name("buildwheel-key-reset-" + name).get(); // Только значок на прозрачном фоне; не изменяем назначения других групп.
-        addTooltip(button, "Сбросить по умолчанию"); // Назначение кнопки объясняется при наведении.
+        addControlTooltip(button, "Сбросить по умолчанию"); // Назначение кнопки объясняется при наведении.
     }
 
     function buildWheelKeys(layout) { // Номера 1–9,0 переносятся на следующую строку при нехватке места.
@@ -684,10 +688,11 @@ exports.create = function(api) {
         }
         var table = new Table(); // Таблица располагается сразу под списком блоков.
         table.left(); // Сохраняем общий левый край списка и подписей настроек.
-        var titles = ["Сдвиг колеса при нехватке места: 100%", "Отключить \"категория/выбор блока №\"", "Ограничить курсор диаметром колеса", "Ограничить курсор внутренним кругом", "Выбор колеса", "Радиальное меню", "Палитра", "Открывать палитру в главном меню", "Клавиша + колёсико мыши", "Отображать номер колеса", "Относительный ввод мыши для колёс"]; // Учитываем все подписи и наибольшую длину процента сдвига.
+        var titles = ["Сдвиг колеса при нехватке места: 100%", "Отключить \"категория/выбор блока №\"", "Ограничить курсор диаметром колеса", "Ограничить курсор внутренним кругом", "Выбор колеса", "Радиальное меню", "Палитра", "Открывать палитру в главном меню", "Клавиша + колёсико мыши", "Отображать номер колеса", "Относительный ввод мыши для колёс", "Градация звука открытия по номеру"]; // Учитываем все подписи и наибольшую длину процента сдвига.
         var longest = 0, measure = new Label(""); // Один временный Label измеряет фактическую ширину игрового шрифта.
         for (var i = 0; i < titles.length; i++) { measure.setText(titles[i]); longest = Math.max(longest, measure.getPrefWidth() / Scl.scl()); } // Переводим измеренные пиксели в UI-единицы, как при расчёте ширины всей панели.
         var layout = {width: width - 18}; // Постоянно оставляем справа 18 UI-пикселей под полосу прокрутки.
+        controlTooltipWidth = layout.width; // Длинные описания ограничены той же шириной, что и левые настройки.
         var combinationWidth = (keyWide + 4) * 2 + keySpace * 2 + resetSpace; // Две широкие кнопки, плюс, квадратный сброс и отступ перед ним.
         layout.start = Math.min(longest * 1.5, Math.max(120, layout.width - combinationWidth)); // Оптимальная колонка — полторы длины самой длинной подписи; при нехватке места сдвигаем влево.
         var shiftWidth = Math.min(302, layout.width - layout.start); // 302 — максимальная ширина слайдера прозрачности «Основного круга» при правой форме шириной 600.
@@ -697,7 +702,7 @@ exports.create = function(api) {
         shift.name = "buildwheel-control-edgeShift"; shift.setValue(Math.round(controls.edgeShift * 100), false); // Показываем сохранённое значение без события изменения.
         shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText("Сдвиг колеса при нехватке места: " + Math.round(value) + "%"); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
         shiftRow.table.add(shift).width(shiftWidth).height(44); // Заполняем остаток строки до резерва прокрутки, не превышая предельную длину.
-        addTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и виртуальный курсор. Работает при относительном вводе, в том числе с включённым ограничителем курсора."); // Объясняем совместное смещение колеса и его виртуального курсора.
+        addControlTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и виртуальный курсор. Работает при относительном вводе, в том числе с включённым ограничителем курсора."); // Объясняем совместное смещение колеса и его виртуального курсора.
         addControlToggle(table, layout, "Отключить \"категория/выбор блока №\"", "disableNumberKeys", "В Mindustry цифры 0-9 в настройках управления по умолчанию используются как быстрые клавиши выбора категорий и блоков, тем самым присваивая каждому блоку свой номер."); // По умолчанию цифровой выбор игры отключён.
         addControlToggle(table, layout, "Ограничить курсор диаметром колеса", "clipOuter", "Останавливает движение курсора за границу диаметра открытого колеса строительства у это самой границы."); // Ограничиваем расстояние от центра внешним радиусом.
         addControlToggle(table, layout, "Ограничить курсор внутренним кругом", "clipInner", "Останавливает движение курсора чуть за границей внутренного круга колеса строительства - для молниеносного выбора."); // При двух включённых границах действует меньшая окружность.
@@ -708,7 +713,7 @@ exports.create = function(api) {
         addControlToggle(table, layout, "Открывать палитру в главном меню", "paletteInMenu", "Новый раздел в Базе данных. Комбинация быстрых клавиш для Палитры срабатывает и в главном меню."); // Управляем пунктом «Палитра» в «Базе данных» и её горячими клавишами в главном меню.
         var scrollRow = controlRow(table, layout, "Клавиша + колёсико мыши", keyWide + 4).table; // Прокрутке нужна только одна удерживаемая клавиша.
         keyButton(scrollRow, controls.bindings.scrollKey, "Основная", keyWide, "scroll-key", "Клавиша перехватывает 'Масштабирование' колёсиком, по умолчанию отключено."); // До назначения клавиши прокрутка остаётся обычной.
-        var numberRow = controlRow(table, layout, "Отображать номер колеса", 44 + 8 + 132).table; // Номер и его цвет располагаются в одной строке.
+        var numberRow = controlRow(table, layout, "Отображать номер колеса", 44 + 8 + 132 + 8 + keySize).table; // Номер, поле цвета и квадратный сброс располагаются в одной строке.
         var showNumber = new CheckBox(""); showNumber.setChecked(controls.showNumber); showNumber.name = "buildwheel-control-showNumber"; // По умолчанию номер выключен.
         showNumber.left(); // Начало видимого значка совпадает с остальными переключателями и слайдером сдвига.
         showNumber.changed(() => { controls.set("showNumber", showNumber.isChecked()); settingsChanged = true; }); // Новый режим действует при следующем открытии или переключении колеса.
@@ -720,9 +725,12 @@ exports.create = function(api) {
         numberHex.setMaxLength(7); numberHex.setValidator(validNumberHex); numberHex.setProgrammaticChangeEvents(false); // Незаконченный ввод не применяется, длина ограничена форматом #RRGGBB.
         numberHex.changed(() => { if (validNumberHex(numberHex.getText())) { controls.set("numberColor", Color.valueOf(numberHex.getText())); settingsChanged = true; } }); // Допустимый RGB сразу меняет подчёркивание и цвет номера.
         numberRow.add(numberHex).width(132).height(44).padLeft(8); // Размер HEX совпадает с полем «Основного круга» в широкой правой форме.
+        var resetNumberColor = numberRow.button(Icon.refresh, Styles.cleari, () => { controls.set("numberColor", Color.white); numberHex.setText("#FFFFFF"); settingsChanged = true; }).size(keySize).padLeft(8).name("buildwheel-reset-number-color").get(); // Сбрасываем только цвет; состояние переключателя и остальные параметры сохраняются.
+        addControlTooltip(resetNumberColor, "Сбросить по умолчанию");
         var relativeRow = controlRow(table, layout, "Относительный ввод мыши для колёс", 88).table; // Новый раздел завершает левый список настроек.
         controlToggle(relativeRow, "relativeMouse", "Relative Mouse Mode - Δx и Δy вместо абсолютного ввода."); // Основной режим не зависит от включения двух круговых ограничителей.
         controlToggle(relativeRow, "customArrow", "Кастомная стрелка курсора - чтоб не путали когда нестандартный ввод."); // Выбор изображения действует и при relative mode, включённом ограничителями.
+        addControlToggle(table, layout, "Градация звука открытия по номеру", "wheelOpenPitch", "Приглушение звука открытия в соответствии с номером колеса."); // По умолчанию включено; у каждого номера своя высота тона звука открытия.
         return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
     }
 
