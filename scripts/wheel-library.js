@@ -103,5 +103,26 @@ exports.create = function() { // Загружаем библиотеку оди�
         return index < 0 ? null : entries[index]; // Отсутствующая запись возвращается как null.
     }
 
-    return {types: types, list: list, add: add, rename: rename, remove: remove, get: get}; // Предоставляем меню операции с данными, не создавая сам интерфейс.
+    // ОТДЕЛЬНОЕ КОЛЕСО В СОХРАНЁННОМ НАБОРЕ
+    function memberOf(id, number) { // Не допускаем изменения чужой записи или сдвига десяти позиций набора.
+        var entry = get(id);
+        return entry != null && entry.type === "wheels" && entry.data != null && Array.isArray(entry.data.wheels) && entry.data.wheels.length === 10 && number >= 0 && number < 10 && number === Math.floor(number) ? entry : null;
+    }
+
+    function renameWheel(id, number, name, description) { // Имя и описание необязательны и не создают подпись на карточке колеса.
+        var entry = memberOf(id, number); if (entry == null || entry.data.wheels[number] == null) return false;
+        var wheel = entry.data.wheels[number]; name = cleanName(name); description = String(description || "");
+        if ((wheel.name || "") === name && (wheel.description || "") === description) return false; // Без фактического изменения диск не трогаем.
+        if (name.length > 0) wheel.name = name; else delete wheel.name; // Пустые метаданные не занимают место в сохранении.
+        if (description.length > 0) wheel.description = description; else delete wheel.description;
+        save(); return true;
+    }
+
+    function replaceWheel(id, number, data) { // Очищение заменяет только один снимок; остальные девять не копируются и не переставляются.
+        var entry = memberOf(id, number); if (entry == null) return false;
+        var replacement = copyData(data); entry.data.wheels[number] = replacement; // Отделяем новый снимок от любых объектов редактора.
+        save(); return true;
+    }
+
+    return {types: types, list: list, add: add, rename: rename, remove: remove, get: get, renameWheel: renameWheel, replaceWheel: replaceWheel}; // Предоставляем меню операции с данными, не создавая сам интерфейс.
 };

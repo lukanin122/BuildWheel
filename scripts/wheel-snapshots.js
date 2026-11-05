@@ -105,5 +105,25 @@ exports.create = function(api) { // Связываем обычные данны
         return true; // Меню после этого обновляет интерфейс и отмечает необходимость записи настроек на диск.
     }
 
-    return {capture: capture, valid: valid, apply: apply}; // Хранилище библиотеки и пользовательский интерфейс остаются за пределами адаптера.
+    // ПОДГОТОВКА ПАССИВНОГО ПРЕВЬЮ БЕЗ ИЗМЕНЕНИЯ НАСТРОЕК
+    function preview(type, data, number, member) { // Вызывается лениво, когда включённая карточка действительно попала в видимую область.
+        if (type === "wheels") { if (data == null || !Array.isArray(data.wheels) || data.wheels.length !== wheelCount || !validNumber(member)) throw new Error("Неверный набор колёс."); data = data.wheels[member]; type = "wheel"; } // Подготавливаем только одно видимое колесо набора.
+        if (!valid(type, data) || !validNumber(number)) throw new Error("Сохранение содержит неверные данные."); // Повреждённые цвета и размеры не попадают в общий код рисования.
+        var visual = api.wheelView.getVisual(number), saved = type === "visual" ? data : type === "wheel" ? data.visual : null; // Блоки без визуала используют собственный вид открытого «манекена».
+        if (saved != null) visual = api.appearanceEditor.previewSnapshot(saved); // Редактор знает проверенные поля и технические значения по умолчанию; живые колёса не изменяются.
+        var result = {visual: visual}, blocks = type === "blocks" ? data : type === "wheel" ? data.blocks : null; // Визуал без блоков не создаёт массив назначений.
+        if (blocks != null) {
+            result.blocks = []; result.scales = []; // Разрешаем имена блоков только для видимых секторов, не копируя скрытый хвост сохранения.
+            for (var sector = 0; sector < visual.sectorCount; sector++) { var slot = blocks.slots[sector]; result.blocks.push(slot == null || slot.block == null ? null : Vars.content.block(slot.block)); result.scales.push(slot == null ? 1 : slot.scale); } // Отсутствующий мод даёт пустой слот; масштаб иконки сохраняется.
+        }
+        return result; // Браузер хранит готовые Color и ссылки Block до выключения или вытеснения превью из кэша.
+    }
+
+    function emptyWheel() { // Очищаем одно место сохранённого набора, не меняя порядок остальных девяти номеров.
+        var visual = api.appearanceEditor.defaultSnapshot(), slots = [];
+        for (var sector = 0; sector < visual.sectorCount; sector++) slots.push({block: null, scale: 1}); // Заводское колесо не содержит назначенных блоков.
+        return {visual: visual, blocks: {slots: slots}};
+    }
+
+    return {capture: capture, valid: valid, apply: apply, preview: preview, emptyWheel: emptyWheel}; // Хранилище библиотеки и пользовательский интерфейс остаются за пределами адаптера.
 };

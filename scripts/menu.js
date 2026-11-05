@@ -191,6 +191,7 @@ exports.create = function(api) {
     saves = browserModule.create({ // Создаём только окно браузера; карточки будут построены при его открытии.
         store: libraryModule.create(), addTooltip: addTooltip, topDialog: topDialog, getWheelNumber: () => editedWheel, // Четыре постоянные вкладки получают единое хранилище.
         capture: type => snapshots.capture(type, editedWheel), // Сохранение берёт собственные данные выбранного номера, не закреплённый игровой образец.
+        preview: (entry, member) => snapshots.preview(entry.type, entry.data, editedWheel, member), drawPreview: wheelView.drawPreview, wheelIcon: wheelIcon, emptyWheel: snapshots.emptyWheel, // Браузер получает общий рисунок и данные сохранений, не создавая интерактивных колёс.
         apply: function(entry, number) { // Вызывается только после штатного подтверждения пользователем.
             if (!snapshots.valid(entry.type, entry.data)) { Vars.ui.showInfo("Сохранение содержит неверные данные."); return; } // Повреждённый набор не должен применяться частично.
             editedSector = -1; applyingSavedData = true; // Прежнее выделение сбрасываем; промежуточные диаметры не перестраивают меню.
@@ -702,7 +703,7 @@ exports.create = function(api) {
         shift.name = "buildwheel-control-edgeShift"; shift.setValue(Math.round(controls.edgeShift * 100), false); // Показываем сохранённое значение без события изменения.
         shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText("Сдвиг колеса при нехватке места: " + Math.round(value) + "%"); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
         shiftRow.table.add(shift).width(shiftWidth).height(44); // Заполняем остаток строки до резерва прокрутки, не превышая предельную длину.
-        addControlTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и виртуальный курсор. Работает при относительном вводе, в том числе с включённым ограничителем курсора."); // Объясняем совместное смещение колеса и его виртуального курсора.
+        addControlTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и курсор. Работает с обычной мышью и с относительным вводом."); // Объясняем совместное смещение колеса и курсора при обоих способах ввода.
         addControlToggle(table, layout, "Отключить \"категория/выбор блока №\"", "disableNumberKeys", "В Mindustry цифры 0-9 в настройках управления по умолчанию используются как быстрые клавиши выбора категорий и блоков, тем самым присваивая каждому блоку свой номер."); // По умолчанию цифровой выбор игры отключён.
         addControlToggle(table, layout, "Ограничить курсор диаметром колеса", "clipOuter", "Останавливает движение курсора за границу диаметра открытого колеса строительства у это самой границы."); // Ограничиваем расстояние от центра внешним радиусом.
         addControlToggle(table, layout, "Ограничить курсор внутренним кругом", "clipInner", "Останавливает движение курсора чуть за границей внутренного круга колеса строительства - для молниеносного выбора."); // При двух включённых границах действует меньшая окружность.

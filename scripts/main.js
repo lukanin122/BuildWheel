@@ -52,6 +52,7 @@ Events.on(ClientLoadEvent, () => {
     var cursorPoint = new Vec2(), sampleFrame = -1, motionActive = false; // Дополнительные события мыши подключены только при открытом колесе.
     var requestedRelative = false, previousOuter = false, previousInner = false, previousRatio = 0; // Изменение режима во время открытого колеса обрабатываем явно.
     var standardCursorTexture = null, standardCursorRegion = null, standardCursorScale = 1; // Штатное изображение Mindustry загружается один раз, только если оно потребуется.
+    var absoluteCursor = null; // Адаптер разового сдвига обычной мыши создаём только при открытии колеса у края.
     var motionProcessor = extend(InputProcessor, {mouseMoved: function(x, y) { return mouseMotion(x, y); }}); // Перехватываем наведение раньше сцены и игрового ввода.
 
     function setMotionEnabled(enabled) { // Закрытое колесо не получает дополнительных вызовов JavaScript от движения мыши.
@@ -139,7 +140,7 @@ Events.on(ClientLoadEvent, () => {
     }
 
     function drawVirtualCursor() { // Контрастная стрелка рисуется поверх секторов и иконок существующего колеса.
-        if (!virtualActive || (numberBadge.visible && virtualPosition.x >= numberBadge.x && virtualPosition.x <= numberBadge.getRight() && virtualPosition.y >= numberBadge.y && virtualPosition.y <= numberBadge.getTop())) return; // Номер закрывает указатель только в своей области.
+        if (!virtualActive) return; // Стрелка рисуется непрерывно; расположенная выше надпись перекрывает её только своими буквами.
         if (!controls.customArrow) { // Системный указатель в relative mode скрыт SDL; воспроизводим штатную стрелку в виртуальной точке.
             if (!prepareStandardCursor()) { closeWheel(); return; }
             var viewport = Core.scene.getViewport(), width = standardCursorRegion.width * standardCursorScale * viewport.getWorldWidth() / viewport.getScreenWidth(), height = standardCursorRegion.height * standardCursorScale * viewport.getWorldHeight() / viewport.getScreenHeight(); // У аппаратной стрелки нет дополнительного множителя Scl.
@@ -275,6 +276,7 @@ Events.on(ClientLoadEvent, () => {
         closeWheel(); // Сначала снимаем ограничение ОС и возвращаем обычный курсор.
         if (invisibleCursor != null) { invisibleCursor.dispose(); invisibleCursor = null; } // Повторное событие не должно освобождать тот же аппаратный курсор дважды.
         if (standardCursorTexture != null) { standardCursorTexture.dispose(); standardCursorTexture = null; standardCursorRegion = null; } // Освобождаем только собственную текстуру, а не курсоры Mindustry.
+        if (absoluteCursor != null) absoluteCursor.dispose(); // Разовый сдвиг не захватывает мышь; освобождаем только его буферы FFM.
         relative.dispose(); // Закрываем FFM-память только после отключения своего режима SDL.
     });
     //==============================================================
@@ -293,7 +295,26 @@ Events.on(ClientLoadEvent, () => {
         wheelScrollAmount = 0; // После закрытия не переносим незавершённый шаг прокрутки в следующее открытие.
     }
 
-    // ПЕРЕКЛЮЧЕНИЕ КОМПЛЕКТА БЕЗ СМЕЩЕНИЯ ЦЕНТРА КОЛЕСА
+    // РАЗОВОЕ РАЗМЕЩЕНИЕ КОЛЕСА И КУРСОРА ПРИ ОТКРЫТИИ
+    function positionWheel() { // mousePosition содержит текущую видимую позицию мыши в координатах сцены.
+        var originalX = mousePosition.x, originalY = mousePosition.y, margin = wheel.getWidth() / 2 * controls.edgeShift; // При нуле сдвига нет, при единице отступ от каждого края равен радиусу.
+        if (margin > 0) {
+            mousePosition.x = Core.scene.getWidth() < margin * 2 ? Core.scene.getWidth() / 2 : Math.max(margin, Math.min(Core.scene.getWidth() - margin, mousePosition.x)); // Если колесо слишком широко, выбираем середину доступной области.
+            mousePosition.y = Core.scene.getHeight() < margin * 2 ? Core.scene.getHeight() / 2 : Math.max(margin, Math.min(Core.scene.getHeight() - margin, mousePosition.y)); // Аналогично обрабатываем верхний и нижний края.
+        }
+        if (!virtualActive && (mousePosition.x != originalX || mousePosition.y != originalY)) { // Обычную мышь переносим только при реальном сдвиге центра, без обработки каждого движения.
+            Core.scene.getViewport().project(cursorPoint.set(mousePosition)); // Получаем экранные координаты Arc с осью Y снизу вверх.
+            var x = Math.round(cursorPoint.x), y = Math.round(cursorPoint.y), moved = x == Core.input.mouseX() && y == Core.input.mouseY(); // Целая позиция совпадает с точностью системной мыши.
+            try { if (!moved) { if (absoluteCursor == null) absoluteCursor = relativeModule.createWarp(relative); moved = absoluteCursor.move(x, y); } }
+            catch (error) { Log.warn("BuildWheel: сдвиг обычной мыши недоступен: @", String(error)); } // Ошибка не оставляет колесо отдельно от фактического курсора.
+            if (moved) Core.scene.screenToStageCoordinates(mousePosition.set(Core.input.mouseX(), Core.input.mouseY())); // Фактическая целая позиция курсора становится центром, включая крайний пиксель окна.
+            else mousePosition.set(originalX, originalY); // При отказе платформы сохраняем обычное открытие непосредственно под мышью.
+        }
+        wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под выбранной точкой открытия.
+        virtualPosition.set(mousePosition); // В относительном режиме сдвигаются и колесо, и его указатель; физическую мышь не трогаем.
+    }
+
+    // ПЕРЕКЛЮЧЕНИЕ КОМПЛЕКТА ПОД ВИДИМЫМ КУРСОРОМ
     function playWheelOpen() { // Порядок звука совпадает с клавиатурой: 1–9, затем 0.
         if (!wheelOpen) return; // Чужое окно могло отменить открытие во время обновления наведения.
         var order = activeWheelNumber == 0 ? wheelCount - 1 : activeWheelNumber - 1;
@@ -301,18 +322,17 @@ Events.on(ClientLoadEvent, () => {
     }
 
     function setWheelNumber(number, opening) { // Используется при открытии и переключении прокруткой.
+        if (wheelOpen && !opening) { if (virtualActive) sampleRelative(); if (!wheelOpen) return; pointerPosition(mousePosition); } // Сначала учитываем движение относительно старого колеса, затем запоминаем видимую точку нового открытия.
         var diameter = wheelView.getDisplayVisual(number).appearance.diameter; // Читаем диаметр действующего визуала с учётом закрепления замком.
-        var centerX = wheel.x + wheel.getWidth() / 2, centerY = wheel.y + wheel.getHeight() / 2; // Запоминаем прежний центр перед изменением размеров.
         wheel.setSize(diameter, diameter); // Применяем размер выбранного комплекта к существующему виджету.
-        wheel.setPosition(centerX - diameter / 2, centerY - diameter / 2); // Сохраняем центр, даже если соседнее колесо больше или меньше предыдущего.
         activeWheelNumber = number; // Рисование и выбор блока теперь используют комплект и слоты этого номера.
         wheel.resetHoverSound(); // Новый набор секторов получает собственный звук первого наведения.
-        if (wheelOpen && !opening) { if (virtualActive) clampVirtual(); showWheelNumber(); playWheelOpen(); } // При смене номера сохраняем захват, обновляем надпись и проигрываем открытие нового колеса.
+        if (wheelOpen && !opening) { positionWheel(); Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); showWheelNumber(); playWheelOpen(); } // Меняем центр без выключения SDL relative mode; обновляем надпись и звук.
     }
 
     // ОТКРЫТИЕ КОЛЕСА ПОД КУРСОРОМ ОБОИМИ СПОСОБАМИ
     function openWheel(number) { // Общая функция для назначенных клавиш и переключения прокруткой.
-        if (wheelOpen && virtualActive) { sampleRelative(); if (wheelOpen) setWheelNumber(number, false); return; } // Смена номера сохраняет центр и уже захваченный режим.
+        if (wheelOpen) { setWheelNumber(number, false); return; } // Переключение переиспользует виджет и захват, не показывая промежуточный системный курсор.
         mousePosition.set(Core.input.mouseX(), Core.input.mouseY()); //координаты мыши
         Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
         setWheelNumber(number, true); // Выбираем данные и диаметр именно открываемого номера.
@@ -321,13 +341,8 @@ Events.on(ClientLoadEvent, () => {
         if (nativeReady && !controls.customArrow && !prepareStandardCursor()) { closeWheel(); return; }
         try { virtualActive = nativeReady && relative.begin(); } catch (error) { closeWheel(); Log.warn("BuildWheel SDL: @", String(error)); return; } // Без запроса relative mode даже не вызываем begin.
         if ((nativeReady || relative.active) && !virtualActive) { closeWheel(); return; } // При ошибке входа или чужом relative mode отменяем именно это открытие.
-        var margin = wheel.getWidth() / 2 * controls.edgeShift; // При нуле сдвига нет, при единице отступ от каждого края равен радиусу.
-        if (margin > 0 && virtualActive) { // Сдвигаем центр и виртуальную позицию, не перемещая системную мышь.
-            mousePosition.x = Core.scene.getWidth() < margin * 2 ? Core.scene.getWidth() / 2 : Math.max(margin, Math.min(Core.scene.getWidth() - margin, mousePosition.x)); // Если колесо слишком широко, выбираем середину доступной области.
-            mousePosition.y = Core.scene.getHeight() < margin * 2 ? Core.scene.getHeight() / 2 : Math.max(margin, Math.min(Core.scene.getHeight() - margin, mousePosition.y)); // Аналогично обрабатываем верхний и нижний края.
-        }
-        wheel.setPosition(mousePosition.x - wheel.getWidth() / 2, mousePosition.y - wheel.getHeight() / 2); // Центрируем колесо под выбранной точкой открытия.
-        virtualPosition.set(mousePosition); sampleFrame = Core.graphics.getFrameId(); // Входной накопитель уже очищен, старые события этого кадра не смещают указатель.
+        positionWheel(); // Сдвиг у края работает с обычным и относительным вводом.
+        sampleFrame = Core.graphics.getFrameId(); // Входной накопитель уже очищен, старые события этого кадра не смещают указатель.
         //* Позиция фиксируется в момент открытия и не следует за мышью.
         //* При выключенном сдвиге у края экрана круг может обрезаться.
         wheelScrollAmount = 0; // Каждое открытие начинает отсчёт прокрутки с целого шага.
@@ -533,7 +548,7 @@ Events.on(ClientLoadEvent, () => {
             wheelScrollAmount -= steps; // Оставляем только ещё не израсходованную дробную прокрутку.
             var nextNumber = ((activeWheelNumber + steps) % wheelCount + wheelCount) % wheelCount; // Переключаем циклически: 1–9, 0, снова 1 (формула работает и назад).
             if (nextNumber != activeWheelNumber) { // Десять полных шагов возвращают тот же номер и не требуют сброса наведения.
-                setWheelNumber(nextNumber); // Переключаем слоты и визуал, подгоняя диаметр без сдвига центра колеса.
+                setWheelNumber(nextNumber); // Открываем следующий комплект под видимым курсором с учётом отступа от краёв.
             }
             return true; // Событие не доходит до KeyboardDevice и игрового zoom; все способы масштабирования из настроек игры остаются прежними.
         },

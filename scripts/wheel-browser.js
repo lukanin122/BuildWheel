@@ -6,7 +6,7 @@ exports.create = function(api) { // Меню передаёт хранилище
     var dialog = extend(BaseDialog, "Браузер колёс строительства", { // Отдельное окно поверх «Радиального меню».
         remove: function() { // Возвращаем прокрутку родителю после завершения анимации, когда браузер уже покинул сцену.
             var removed = this.super$remove(); // Выполняем штатное удаление окна.
-            if (removed) api.onClosed(); // Не возвращаем фокус списку блоков, пока браузер ещё закрывается.
+            if (removed) { clearPreviews(); visibility = {}; showAll = {}; if (grid != null) grid.clearChildren(); api.onClosed(); } // Закрытый браузер освобождает карточки, визуалы и временные флаги показа.
             return removed; // Сохраняем результат штатного метода Scene.
         }
     });
@@ -14,6 +14,9 @@ exports.create = function(api) { // Меню передаёт хранилище
     var grid = null, pane = null, childDialog = null; // Храним только актуальную сетку, её прокрутку и одно дочернее окно.
     var tabButtons = []; // Ссылки нужны для переключения вкладок без постоянных update-обработчиков.
     var titles = {visual: "Сохранить визуал...", blocks: "Сохранить блоки...", wheel: "Сохранить колесо...", wheels: "Сохранить колёса..."}; // Заголовки штатного окна ввода имени.
+    var previews = [], readyPreviews = [], showAll = {}, visibility = {}, showAllButton = null; // Состояние показа отделено от сохранений и не записывается на диск.
+    var maxReadyPreviews = 64; // Ограничиваем только кэш подготовленных данных; число сохранений и карточек не ограничено.
+    var wheelIcon = api.wheelIcon || new TextureRegionDrawable(Core.atlas.find("buildwheel-icon_wheel")); // Используем имеющуюся иконку без загрузки новой текстуры.
 
     // ИМЯ СОХРАНЕНИЯ И ШТАТНЫЕ ПОДТВЕРЖДЕНИЯ
     function requestSave(type) { // Вызывается квадратной кнопкой соответствующего типа в «Радиальном меню».
@@ -26,43 +29,46 @@ exports.create = function(api) { // Меню передаёт хранилище
         childDialog = api.topDialog(); // Запоминаем штатное окно, чтобы закрыть его вместе с модом при сбросе мира.
     }
 
-    function requestApply(entry) { // Карточка передаёт сохранение, выбранное кнопкой ok.
+    function requestApply(entry, member) { // Ячейка набора может передать номер одного колеса, заголовок — весь набор.
         var number = api.getWheelNumber(); // Фиксируем целевой номер до открытия подтверждения.
+        var selected = member == null ? entry : {type: "wheel", data: entry.data != null && Array.isArray(entry.data.wheels) ? entry.data.wheels[member] : null}; // Повреждённый набор передаётся обычной проверке данных, не вызывая исключение обработчика кнопки.
         Vars.ui.showConfirm("Подтверждение", "Данные будут перенесены в Радиальное меню", () => { // Используем штатную плашку подтверждения игры.
-            api.apply(entry, number); // Меняем только указанные сохранением данные; набор применяется ко всем десяти номерам.
+            api.apply(selected, number); // Меняем выбранное колесо; из заголовка набор применяется ко всем десяти номерам.
         });
         childDialog = api.topDialog(); // Escape сначала должен закрывать подтверждение, а не весь браузер.
     }
 
-    function requestDelete(entry) { // Удаление требует такого же подтверждения, как удаление схемы.
-        Vars.ui.showConfirm("@confirm", "Удалить сохранение «" + entry.name + "»?", () => { // Имя позволяет проверить, какая именно карточка будет удалена.
-            store.remove(entry.id); // Удаляем только сохранённую запись; действующие колёса не меняются.
+    function requestDelete(entry, member) { // Удаление требует такого же подтверждения, как удаление схемы.
+        var message = member == null ? "Удалить сохранение «" + entry.name + "»?" : "Очистить колесо № " + member + " в наборе «" + entry.name + "»? Блоки будут удалены, визуал сброшен по умолчанию."; // Отдельная ячейка не удаляет весь набор и не сдвигает номера.
+        Vars.ui.showConfirm("@confirm", message, () => { // Имя позволяет проверить, какая именно карточка будет удалена.
+            if (member == null) store.remove(entry.id); else store.replaceWheel(entry.id, member, api.emptyWheel()); // Действующие игровые колёса не меняются.
             rebuildGrid(); // Убираем карточку из списка без пересоздания окна.
         });
         childDialog = api.topDialog(); // Сохраняем ссылку на последнюю дочернюю плашку.
     }
 
     // РЕДАКТИРОВАНИЕ ИМЕНИ И ОПИСАНИЯ ПО ШАБЛОНУ СХЕМ
-    function requestEdit(entry) { // Иконка pencil открывает отдельный редактор метаданных сохранения.
-        var edit = new BaseDialog("Редактировать сохранение"); // Данные колеса в редакторе имени не изменяются.
+    function requestEdit(entry, member) { // Иконка pencil открывает отдельный редактор метаданных сохранения или колеса набора.
+        var metadata = member == null ? entry : entry.data != null && Array.isArray(entry.data.wheels) ? entry.data.wheels[member] || {} : {}; // Имя отдельного колеса хранится только при явном вводе пользователем.
+        var edit = new BaseDialog(member == null ? "Редактировать сохранение" : "Редактировать колесо № " + member); // Данные колеса в редакторе имени не изменяются.
         edit.name = "buildwheel-save-editor"; // Служебное имя для проверки и поиска окна в сцене.
         edit.setFillParent(true); // Редактор схем Mindustry также занимает всё окно.
         edit.cont.margin(30); // Сохраняем отступы штатного редактора схем.
         edit.cont.add("@name").padRight(6); // Подпись поля имени.
-        var name = edit.cont.field(entry.name, value => {}).size(400, 55).name("buildwheel-save-name").get(); // Поле имеет размеры из редактора схем.
+        var name = edit.cont.field(metadata.name || "", value => {}).size(400, 55).name("buildwheel-save-name").get(); // Поле имеет размеры из редактора схем.
         edit.cont.row(); // Описание располагается ниже имени.
         edit.cont.add("@description").padRight(6); // Описание сохраняется вместе с именем, как у схемы.
-        var description = new TextArea(entry.description || "", Styles.areaField); // Многострочное поле использует штатное оформление игры.
+        var description = new TextArea(metadata.description || "", Styles.areaField); // Многострочное поле использует штатное оформление игры.
         description.name = "buildwheel-save-description"; // Служебное имя поля описания.
         edit.cont.add(description).size(400, 140); // Размер поля соответствует редактору схем.
         var accept = () => { // Один обработчик обслуживает кнопку OK и Enter.
-            if (String(name.getText()).trim().length == 0) return; // Не разрешаем заменить имя пустым текстом.
-            store.rename(entry.id, String(name.getText()).trim(), String(description.getText())); // Сохраняем метаданные; снимок блоков и визуала остаётся прежним.
+            if (member == null && String(name.getText()).trim().length == 0) return; // Отдельному колесу набора собственное имя не обязательно.
+            if (member == null) store.rename(entry.id, String(name.getText()).trim(), String(description.getText())); else store.renameWheel(entry.id, member, String(name.getText()).trim(), String(description.getText())); // Снимок блоков и визуала остаётся прежним.
             edit.hide(); // Возвращаемся в браузер.
             rebuildGrid(); // Показываем новое имя и учитываем его в текущем поиске.
         };
         edit.buttons.button("@ok", Icon.ok, accept).size(210, 64).pad(4).name("buildwheel-save-edit-ok") // Порядок и размеры кнопок повторяют редактор схем.
-            .disabled(() => String(name.getText()).trim().length == 0); // Проверяем доступность только у открытого окна редактирования.
+            .disabled(() => member == null && String(name.getText()).trim().length == 0); // Проверяем доступность только у открытого окна редактирования.
         edit.buttons.button("@cancel", Icon.cancel, () => edit.hide()).size(210, 64).pad(4); // Отмена сохраняет прежнее имя и описание.
         edit.keyDown(KeyCode.enter, () => { if (Core.scene.getKeyboardFocus() !== description) accept(); }); // Enter внутри описания переносит строку, в остальных случаях подтверждает.
         edit.addCloseListener(); // Escape и Back закрывают редактор без применения правок.
@@ -72,45 +78,131 @@ exports.create = function(api) { // Меню передаёт хранилище
         childDialog = edit; // Сброс мира закроет редактор вместе с браузером.
     }
 
-    // КАРТОЧКИ СОХРАНЕНИЙ БЕЗ ЗАГРУЗКИ ИЗОБРАЖЕНИЙ
-    function addAction(bar, icon, name, tooltip, action) { // Все три действия карточки имеют одинаковые размеры и оформление.
-        var button = bar.button(icon, Styles.emptyi, action).size(50).name(name).get(); // Штатные кнопки панели схем размером 50×50.
-        api.addTooltip(button, tooltip); // Получаем полупрозрачную серую подсказку под левым краем кнопки.
+    // ЛЕНИВЫЕ ПРЕВЬЮ И ОГРАНИЧЕННЫЙ КЭШ ДАННЫХ
+    function clearPreviews() { previews = []; readyPreviews = []; } // Старые виджеты и Color не удерживаются браузером после перестройки или закрытия.
+
+    function releasePreview(state) { // Выключенное превью сразу освобождает свои подготовленные данные.
+        state.model = null;
+        var index = readyPreviews.indexOf(state); if (index >= 0) readyPreviews.splice(index, 1); // Кэш небольшой; поиск выполняется только при действии пользователя или вытеснении.
     }
 
-    function addCard(entry) { // Создаём только видимую карточку выбранной вкладки.
+    function setAllPreviews(enabled) { // Общая кнопка меняет флаги, не подготавливая сотни изображений заранее.
+        showAll[activeType] = enabled; visibility[activeType] = Object.create(null); // Сбрасываем индивидуальные исключения только текущего раздела.
+        for (var i = 0; i < previews.length; i++) { var state = previews[i]; state.enabled = enabled; state.element.visible = enabled; state.button.setChecked(enabled); if (!enabled) releasePreview(state); } // Скрытый Element вообще не получает вызов draw; новые Color здесь не нужны.
+        if (showAllButton != null) showAllButton.setChecked(enabled); // Отображаем действующее состояние общей кнопки.
+    }
+
+    function togglePreview(state) { // Отдельная кнопка не перестраивает сетку и не сбрасывает прокрутку.
+        if (showAll[activeType]) { // Переход от общего показа к индивидуальному сохраняет состояние остальных текущих карточек.
+            showAll[activeType] = false;
+            var entries = store.list(activeType, ""); // Учитываем и записи, временно скрытые поиском; чтения файла здесь нет.
+            for (var i = 0; i < entries.length; i++) { if (activeType === "wheels") { for (var number = 0; number < 10; number++) visibility[activeType][entries[i].id + "-" + number] = true; } else visibility[activeType][entries[i].id] = true; } // Только при нажатии сохраняем прежнее включение всех остальных колёс раздела.
+            showAllButton.setChecked(false);
+        }
+        state.enabled = !state.enabled; state.element.visible = state.enabled; visibility[activeType][state.key] = state.enabled; state.button.setChecked(state.enabled); // Скрытый Element не получает draw; состояние сохраняется при поиске и изменении размеров окна.
+        if (!state.enabled) releasePreview(state); // Включение остаётся ленивым: вне экрана данные не подготавливаются.
+    }
+
+    function previewFailure(error) { // Не повторяем ошибку рисования каждый кадр и не оставляем общий режим включённым.
+        setAllPreviews(false); // Ошибка одной карточки выключает показ всего открытого раздела и очищает его кэш.
+        Log.warn("BuildWheel: показ сохранённых колёс отключён: @", String(error));
+        Core.app.post(() => Vars.ui.showInfo("Показ колёс отключён: " + String(error))); // Сообщение открываем после завершения рисования и восстановления обрезки.
+    }
+
+    function preparePreview(state, frame) { // Готовые данные ограничены кэшем, а не общим числом сохранений.
+        if (state.model == null) {
+            if (readyPreviews.length >= maxReadyPreviews) { // Вытесняем давно не рисовавшуюся карточку, обычно уже за пределами прокрутки.
+                var oldest = -1;
+                for (var i = 0; i < readyPreviews.length; i++) if (readyPreviews[i].frame != frame && (oldest < 0 || readyPreviews[i].frame < readyPreviews[oldest].frame)) oldest = i;
+                if (oldest < 0) throw new Error("Слишком много одновременно видимых превью (предел " + maxReadyPreviews + ")."); // Перегруженный общий показ прекращается вместо бесконечного вытеснения видимых данных.
+                releasePreview(readyPreviews[oldest]);
+            }
+            state.model = api.preview(state.entry, state.member); readyPreviews.push(state); // HEX и имена блоков разрешаются один раз до выключения или вытеснения.
+        }
+        state.frame = frame; return state.model; // Обычный кадр читает только существующие данные.
+    }
+
+    function createPreview(state) { // Пассивный Element содержит только draw, без update, hover, звуков и обработчиков мыши.
+        var element = extend(Element, {
+            draw: function() {
+                if (!state.enabled) return;
+                var failure = null, clipping = false;
+                try { if (!this.clipBegin()) return; clipping = true; api.drawPreview(this, preparePreview(state, Core.graphics.getFrameId())); } // Невидимые карточки отбрасываются до подготовки данных, включая вложенные ячейки наборов.
+                catch (error) { failure = error; }
+                finally { Draw.reset(); if (clipping) try { this.clipEnd(); } catch (error) { failure = error; } } // Восстанавливаем цвет и обрезку даже при ошибке рисунка; неисправный показ выключается.
+                if (failure != null) previewFailure(failure);
+            }
+        });
+        element.touchable = Touchable.disabled; element.visible = state.enabled; element.name = "buildwheel-save-preview-" + state.key; state.element = element; return element; // Картинка не участвует в выборе секторов; выключенная не получает draw.
+    }
+
+    // КАРТОЧКИ СОХРАНЕНИЙ С ПАССИВНОЙ ОБЛАСТЬЮ РИСУНКА
+    function addAction(bar, icon, name, tooltip, action) { // Все четыре действия карточки имеют одинаковые размеры и оформление.
+        var button = bar.button(icon, Styles.emptyi, action).size(50).name(name).get(); // Штатные кнопки панели схем размером 50×50.
+        api.addTooltip(button, tooltip); // Получаем полупрозрачную серую подсказку под левым краем кнопки.
+        return button; // Кнопка показа обновляет checked только при действии пользователя.
+    }
+
+    function addCard(parent, entry, member) { // Одна карточка показывает отдельное сохранение либо колесо внутри набора.
+        var key = entry.id + (member == null ? "" : "-" + member), state = {key: key, entry: entry, member: member, model: null, frame: -1}; // Состояние картинки не меняет сохранённые данные.
+        state.enabled = Object.prototype.hasOwnProperty.call(visibility[activeType], key) ? visibility[activeType][key] : !!showAll[activeType];
         var card = new Table(Tex.pane); // Штатный фон карточки схем, не затрагивающий общие стили игры.
-        card.name = "buildwheel-save-" + entry.id; // Идентификатор записи сохраняется при переименовании.
+        card.name = "buildwheel-save-" + key; // Номер внутри набора отличает его десять ячеек.
         card.top().margin(0); // Верхняя панель примыкает к границе карточки.
         var bar = new Table(Styles.black8); // Чёрная панель явно отделяет действия от области будущего изображения.
-        bar.left(); // Кнопки идут слева направо: использовать, редактировать, удалить.
-        addAction(bar, Icon.ok, "buildwheel-save-use-" + entry.id, "Использовать", () => requestApply(entry)); // Применение всегда требует подтверждения.
-        addAction(bar, Icon.pencil, "buildwheel-save-edit-" + entry.id, "Редактировать", () => requestEdit(entry)); // Изменяем имя и описание.
-        addAction(bar, Icon.trash, "buildwheel-save-delete-" + entry.id, "Удалить", () => requestDelete(entry)); // Действующее колесо удалением записи не затрагивается.
+        bar.left(); // Кнопки идут слева направо: использовать, отобразить, редактировать, удалить.
+        addAction(bar, Icon.ok, "buildwheel-save-use-" + key, "Использовать", () => requestApply(entry, member)); // Применение всегда требует подтверждения.
+        state.button = addAction(bar, wheelIcon, "buildwheel-save-display-" + key, "Отобразить", () => togglePreview(state)); // Повторное нажатие скрывает только этот рисунок.
+        state.button.setChecked(state.enabled); previews.push(state); // Без update-обработчика показываем выбранное состояние.
+        addAction(bar, Icon.pencil, "buildwheel-save-edit-" + key, "Редактировать", () => requestEdit(entry, member)); // Редактор получает родительскую запись и при необходимости номер внутри набора.
+        addAction(bar, Icon.trash, "buildwheel-save-delete-" + key, "Удалить", () => requestDelete(entry, member)); // Действующие игровые колёса удалением записи не затрагиваются.
         card.add(bar).width(200).height(50); // Размер верхней панели соответствует шаблону схем.
         card.row(); // Остальная часть карточки располагается под действиями.
-        var body = new Table(); // Область изображения пока оставляем пустой: текстуры для сохранений не создаются.
-        body.bottom(); // Имя располагается в нижней части, как у карточки схемы.
-        var caption = new Table(Styles.black3); // Полупрозрачная полоса под названием.
-        caption.margin(1); // Повторяем небольшой внутренний отступ полосы имени схемы.
-        var label = caption.add(entry.name, Styles.outlineLabel).pad(4).maxWidth(192).get(); // Одинаковая ширина названий для всех четырёх типов.
-        label.setEllipsis(true); // Длинное имя сокращается в карточке, сохраняя полный текст в редакторе.
-        body.add(caption).growX(); // Подложка имени занимает всю ширину карточки.
-        card.add(body).size(200); // Размер области совпадает с превью схемы, но изображения пока нет.
-        grid.add(card).pad(4).top(); // Карточки располагаются близко друг к другу одинаковыми прямоугольниками.
+        var body = new Stack(); // Превью занимает весь квадрат; название накладывается поверх в его нижней части.
+        body.add(createPreview(state)); // Отдельные текстуры и интерактивное колесо для сохранения не создаются.
+        if (member == null) { // У отдельных колёс набора собственной подписи в карточке нет.
+            var overlay = new Table(); // Полоса имени накладывается на изображение, сохраняя квадрат размером 200.
+            overlay.bottom(); // Имя располагается в нижней части, как у карточки схемы.
+            var caption = new Table(Styles.black3); // Полупрозрачная полоса под названием.
+            caption.margin(1); // Повторяем небольшой внутренний отступ полосы имени схемы.
+            var label = caption.add(entry.name, Styles.outlineLabel).pad(4).maxWidth(192).get(); // Одинаковая ширина названий для всех четырёх типов.
+            label.setEllipsis(true); // Длинное имя сокращается в карточке, сохраняя полный текст в редакторе.
+            overlay.add(caption).growX(); body.add(overlay); // Подложка имени занимает всю ширину карточки.
+        }
+        card.add(body).size(200); // Сохранённый диаметр 260 занимает 180 из 200 единиц; больший визуал обрезается границами квадрата.
+        parent.add(card).pad(4).top(); // Карточки располагаются близко друг к другу одинаковыми прямоугольниками.
+    }
+
+    // НАБОР ИЗ ДЕСЯТИ КОЛЁС С ОБЩИМ ЗАГОЛОВКОМ И РАМКОЙ
+    function addSet(entry, columns) { // Каждому набору отводится отдельный блок; на узком экране его карточки переносятся внутри рамки.
+        var group = new Table(), heading = new Table(); heading.left(); // Заголовок расположен чуть выше верхней линии рамки.
+        var title = heading.add(entry.name, Styles.outlineLabel).minWidth(0).growX().left().get(); title.setEllipsis(true); // Длинное имя сокращается в доступном месте и не выталкивает кнопки за экран.
+        addAction(heading, Icon.ok, "buildwheel-set-use-" + entry.id, "Использовать набор", () => requestApply(entry)); // Сохраняем возможность применить сразу все десять номеров.
+        addAction(heading, Icon.pencil, "buildwheel-set-edit-" + entry.id, "Редактировать набор", () => requestEdit(entry));
+        addAction(heading, Icon.trash, "buildwheel-set-delete-" + entry.id, "Удалить набор", () => requestDelete(entry));
+        var frame = extend(Table, {
+            draw: function() { this.super$draw(); Draw.color(Color.gray); Lines.stroke(Scl.scl(1)); Lines.rect(this.x, this.y, this.getWidth(), this.getHeight()); Draw.reset(); } // Одна тонкая рамка охватывает все десять ячеек, без текстуры на каждый набор.
+        });
+        frame.top().left().margin(4);
+        for (var order = 0; order < 10; order++) { if (order > 0 && order % columns == 0) frame.row(); addCard(frame, entry, (order + 1) % 10); } // Порядок как у клавиатуры: 1–9, затем 0.
+        group.add(heading).growX().padBottom(3); group.row(); group.add(frame).growX(); // Заголовок не касается тонкой границы.
+        grid.add(group).growX().pad(4).padBottom(12); grid.row(); // Следующий набор начинается отдельной строкой даже при широком окне.
     }
 
     function rebuildGrid() { // Перестраиваем только список при поиске, смене вкладки или изменении записей.
         if (grid == null) return; // До первого открытия список ещё не создан.
+        clearPreviews(); // Перестроенный список не удерживает Color и ссылки Block от прежних карточек.
         grid.clearChildren(); // Старые карточки больше не удерживаются сеткой.
+        if (visibility[activeType] == null) visibility[activeType] = Object.create(null); // Ключи записей безопасны даже при нестандартном содержимом библиотеки.
         var entries = store.list(activeType, query); // Фильтруем по неудаляемому типу и тексту поиска в памяти.
         var columns = Math.max(1, Math.floor(Core.scene.getWidth() / Scl.scl(230))); // Число колонок рассчитывается по шаблону браузера схем Mindustry.
         for (var i = 0; i < entries.length; i++) { // Для остальных вкладок карточки сейчас не создаются.
-            if (i > 0 && i % columns == 0) grid.row(); // Переносим очередную карточку при заполнении ряда.
-            addCard(entries[i]); // Создаём карточку существующей записи.
+            if (activeType === "wheels") addSet(entries[i], columns); // Десять ячеек переносятся внутри собственного набора.
+            else { if (i > 0 && i % columns == 0) grid.row(); addCard(grid, entries[i], null); } // Остальные разделы сохраняют обычную сетку карточек.
         }
         if (entries.length == 0) grid.add("Сохранений не найдено").pad(20); // Пустая вкладка и пустой результат поиска имеют понятное пояснение.
         for (var t = 0; t < tabButtons.length; t++) tabButtons[t].button.setChecked(tabButtons[t].type == activeType); // Выделяем только текущую вкладку.
+        if (showAllButton != null) showAllButton.setChecked(!!showAll[activeType]); // Смена раздела показывает его собственный режим показа.
         if (pane != null) pane.setScrollY(0); // Новый список начинается сверху.
     }
 
@@ -123,6 +215,8 @@ exports.create = function(api) { // Меню передаёт хранилище
         dialog.cont.add(search).growX().padBottom(4); // Располагаем поиск по ширине окна.
         dialog.cont.row(); // Вкладки начинаются под поиском.
         var tabs = new Table(); // Четыре типа данных нельзя переименовать или удалить.
+        showAllButton = tabs.button(wheelIcon, Styles.emptyTogglei, () => setAllPreviews(!showAll[activeType])).size(50).padRight(6).name("buildwheel-saves-display-all").get(); // Подготавливаем только флаг общего показа, не все изображения сразу.
+        api.addTooltip(showAllButton, "Отобразить все колёса раздела");
         tabButtons = []; // Старые кнопки после перестройки больше не нужны.
         for (var i = 0; i < store.types.length; i++) { // Порядок типов задаёт хранилище.
             let type = store.types[i]; // Отдельная ссылка нужна каждому обработчику кнопки.
@@ -130,6 +224,7 @@ exports.create = function(api) { // Меню передаёт хранилище
                 .height(50).minWidth(120).pad(2).name("buildwheel-saves-tab-" + type.id).get(); // Единый размер вкладок с читаемыми названиями.
             tabButtons.push({type: type.id, button: button}); // Запоминаем кнопку для обновления выделения при переключении.
         }
+        tabs.add().width(56); // Симметричный резерв справа оставляет четыре вкладки на прежнем месте относительно центра окна.
         var tabsPane = new ScrollPane(tabs, Styles.noBarPane); // На узком экране вкладки можно прокрутить горизонтально, не обрезая подписи.
         tabsPane.setScrollingDisabled(false, true); // Вертикальная прокрутка вкладкам не нужна.
         dialog.cont.add(tabsPane).growX().height(56); // Сохраняем одну строку вкладок над списком.

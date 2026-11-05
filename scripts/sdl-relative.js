@@ -165,6 +165,11 @@ exports.create = function() {
             if ((Number(wasInit.invokeWithArguments(array([new java.lang.Integer("32")]))) & 32) == 0) throw new Error("SDL Linux: видео игры не принадлежит найденной SDL");
             if (addr(currentWindow.invokeWithArguments(none)) != expectedWindow) throw new Error("SDL Linux: текущий GL-контекст не принадлежит окну Arc"); // SDL возвращает собственное окно; сравнение адресов не разыменовывает окно Arc.
             var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "Linux SDL2 " + version[0] + "." + version[1] + "." + version[2], image: owner.path, allowed: () => true}; // Публичный Linux API не раскрывает внутренний флаг warp fallback.
+            try { // Разовый перенос обычного указателя не является условием доступности относительного ввода.
+                var warp = find.invoke(symbols, ["SDL_WarpMouseInWindow"]).orElseThrow();
+                exports.linuxImage(maps, {warp: addr(warp), currentWindow: addresses.currentWindow}, 2); // Принадлежность окна уже проверена; дополнительный экспорт должен находиться в том же образе SDL.
+                found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // Публичная SDL-функция принимает окно и координаты от верхнего левого угла.
+            } catch (unsupportedWarp) {} // Отсутствующий экспорт отключает только сдвиг обычного указателя.
             maps = null; addresses = null; pointers = null; names = null; return found; // Текст карты памяти не остаётся в рабочих замыканиях.
         }
         // MACOS: ЭКСПОРТЫ ЗАГРУЖЕННОЙ SDL И ПРОВЕРКА ОТЛОЖЕННОГО ВХОДА COCOA
@@ -237,6 +242,7 @@ exports.create = function() {
                 return addr(current) == addr(listener) && Number(pending.invokeWithArguments(pendingArgs)) == 0;
             }
             var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "macOS Cocoa SDL2 2.0.16", image: owner.path};
+            try { var warp = symbol("SDL_WarpMouseInWindow"); sameImage(warp, "SDL_WarpMouseInWindow"); found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); } catch (unsupportedWarp) {} // Разовый перенос разрешён только через экспорт уже подтверждённой SDL.
             found.ready = () => stable() && addr(mouseFocus.invokeWithArguments(none)) == expectedWindow && addr(keyboardFocus.invokeWithArguments(none)) == expectedWindow && Number(hint.invokeWithArguments(hintArgs)) == 0; // Отложенное включение и принудительный warp отвергаем до захвата.
             found.beforeBegin = () => clear.invokeWithArguments(none); // Отделяем новую ошибку CoreGraphics от прежних сообщений SDL.
             found.allowed = function() { var error = String(SDL.SDL_GetError()); found.rejection = "SDL Cocoa: " + (error.length > 0 ? error : "изменилось состояние оконного обработчика"); return error.length == 0 && stable(); }; // В SDL 2.0.16 ошибка native-пути сохраняется даже после успешного warp fallback.
@@ -253,6 +259,14 @@ exports.create = function() {
         var asBuffer = seg.getMethod("asByteBuffer", []), xBuffer = asBuffer.invoke(x, none).order(java.nio.ByteOrder.nativeOrder()), yBuffer = asBuffer.invoke(y, none).order(java.nio.ByteOrder.nativeOrder()); // Представления той же памяти создаём один раз, чтобы читать числа без reflection на каждом кадре.
         var on = array([new java.lang.Integer("1")]), off = array([new java.lang.Integer("0")]);
         function focused() { if (Core.app.getWindow() != window) return false; var flags = SDL.SDL_GetWindowFlags(window); return (flags & SDL.SDL_WINDOW_INPUT_FOCUS) != 0 && (flags & SDL.SDL_WINDOW_MINIMIZED) == 0; } // Не используем старое окно при его замене и не захватываем неактивное.
+        result.absoluteMode = () => !owned && !closing && focused() && Number(mode.invokeWithArguments(none)) == 0; // Разовый перенос не вмешивается в собственный или чужой относительный режим.
+        var warpArgs = null; // Аргументы обычного переноса не нужны, пока пользователь не открыл колесо у края экрана.
+        result.warpAbsolute = function(screenX, screenY) {
+            if (nativeFunctions.warp == null || !result.absoluteMode() || (nativeFunctions.valid != null && !nativeFunctions.valid())) return false; // В Cocoa не переносим указатель во время отложенного фокусного клика или замены оконного обработчика.
+            if (warpArgs == null) warpArgs = array([ofAddress.invoke(null, [new java.lang.Long(String(window))]), null, null]); // Используем только подтверждённый указатель игрового окна.
+            warpArgs[1] = new java.lang.Integer(String(screenX)); warpArgs[2] = new java.lang.Integer(String(Core.graphics.getHeight() - screenY)); // Это обратное преобразование SdlInput.handleInput для координат мыши.
+            nativeFunctions.warp.invokeWithArguments(warpArgs); return true; // Синхронизацию Java-позиции выполняет общий разовый адаптер ниже.
+        };
         function stopReleaseRetry() { if (releaseListener == null) return; var listener = releaseListener; releaseListener = null; Core.app.post(() => Core.app.removeListener(listener)); } // Удаление выполняется вне обхода слушателей приложения.
         function retryRelease() { // Дополнительный update существует только на время отложенного закрытия Cocoa.
             if (disposing || releaseListener != null) return;
@@ -292,4 +306,57 @@ exports.create = function() {
         Log.warn("BuildWheel SDL отключён: @", result.reason);
     }
     return result;
+};
+
+// РАЗОВЫЙ СДВИГ ОБЫЧНОГО УКАЗАТЕЛЯ ПРИ ОТКРЫТИИ У КРАЯ ЭКРАНА
+exports.createWarp = function(relative) { // Не удерживает курсор и не выполняет работу при его движении.
+    var fields = null, nativeMove = null, arena = null, closeArena = null, failed = false, disposed = false;
+    function prepareWindows() { // Используем публичные функции Windows независимо от распознавания приватной SDL.
+        if (!/^(amd64|x86_64)$/.test(String(java.lang.System.getProperty("os.arch")))) throw new Error("разовый сдвиг Windows рассчитан на x86-64"); // Размер CURSORINFO ниже соответствует 64-битному ABI.
+        var type = n => java.lang.Class.forName(n), F = Packages.java.lang.foreign, seg = type("java.lang.foreign.MemorySegment"), arenas = type("java.lang.foreign.Arena"), linkerType = type("java.lang.foreign.Linker");
+        var integer = F.ValueLayout.JAVA_INT, address = F.ValueLayout.ADDRESS, objectType = type("java.lang.Object");
+        function array(values) { var a = java.lang.reflect.Array.newInstance(objectType, values.length); for (var i = 0; i < values.length; i++) a[i] = values[i]; return a; } // Упаковываем точные Java-типы для FFM.
+        var none = array([]), eight = new java.lang.Long("8");
+        arena = arenas.getMethod("ofShared", []).invoke(null, none); closeArena = () => arenas.getMethod("close", []).invoke(arena, none); // Буферы создаются однажды и освобождаются при завершении мода.
+        var allocate = arenas.getMethod("allocate", [java.lang.Long.TYPE, java.lang.Long.TYPE]), asBuffer = seg.getMethod("asByteBuffer", []), getAddress = seg.getMethod("address", []);
+        var library = F.SymbolLookup.libraryLookup("user32.dll", arena), linker = linkerType.getMethod("nativeLinker", []).invoke(null, none), downcall = linkerType.getMethod("downcallHandle", [seg, type("java.lang.foreign.FunctionDescriptor"), type("[Ljava.lang.foreign.Linker$Option;")]);
+        var options = java.lang.reflect.Array.newInstance(type("java.lang.foreign.Linker$Option"), 0);
+        function link(name, result, args) { return downcall.invoke(linker, array([library.find(name).orElseThrow(), F.FunctionDescriptor.of(result, args), options])); } // Адреса получены из системной user32.dll, без поиска машинного кода.
+        function buffer(size) { var memory = allocate.invoke(arena, [new java.lang.Long(String(size)), eight]); return {memory: memory, data: asBuffer.invoke(memory, none).order(java.nio.ByteOrder.nativeOrder())}; }
+        var point = buffer(8), rect = buffer(16), cursor = buffer(24); // POINT, RECT и CURSORINFO имеют постоянные размеры в Windows x64.
+        var active = link("GetActiveWindow", address, []), foreground = link("GetForegroundWindow", address, []), client = link("GetClientRect", integer, [address, address]), origin = link("ClientToScreen", integer, [address, address]);
+        var info = link("GetCursorInfo", integer, [address]), move = link("SetCursorPos", integer, [integer, integer]);
+        var clientArgs = array([null, rect.memory]), originArgs = array([null, point.memory]), infoArgs = array([cursor.memory]), moveArgs = array([null, null]); // Повторные открытия используют те же массивы и буферы.
+        nativeMove = function(x, y) {
+            var window = active.invokeWithArguments(none), hwnd = Number(getAddress.invoke(window, none)); // GetActiveWindow относится к текущему потоку Arc.
+            if (hwnd == 0 || Number(getAddress.invoke(foreground.invokeWithArguments(none), none)) != hwnd) return false; // Не перемещаем указатель над другим приложением.
+            cursor.data.putInt(0, 24); // Перед каждым GetCursorInfo заново задаём cbSize: Windows может обнулить его при заполнении этого же буфера.
+            if (Number(info.invokeWithArguments(infoArgs)) == 0 || (cursor.data.getInt(4) & 1) == 0) return false; // Скрытый системный указатель может принадлежать чужому относительному вводу.
+            clientArgs[0] = window; originArgs[0] = window; point.data.putInt(0, 0); point.data.putInt(4, 0);
+            if (Number(client.invokeWithArguments(clientArgs)) == 0 || Number(origin.invokeWithArguments(originArgs)) == 0) return false;
+            var width = rect.data.getInt(8) - rect.data.getInt(0), height = rect.data.getInt(12) - rect.data.getInt(4); // Размер клиентской области учитывает текущий монитор и масштаб Windows.
+            if (width <= 0 || height <= 0) return false;
+            var left = point.data.getInt(0), top = point.data.getInt(4), currentX = cursor.data.getInt(16), currentY = cursor.data.getInt(20);
+            if (currentX < left || currentX >= left + width || currentY < top || currentY >= top + height) return false; // Сдвиг предназначен только для указателя внутри игрового окна.
+            moveArgs[0] = new java.lang.Integer(String(Math.round(left + x * width / Core.graphics.getWidth()))); // Переводим экранные координаты Arc в координаты рабочего стола.
+            moveArgs[1] = new java.lang.Integer(String(Math.round(top + (Core.graphics.getHeight() - y) * height / Core.graphics.getHeight())));
+            return Number(move.invokeWithArguments(moveArgs)) != 0;
+        };
+    }
+    return {
+        move: function(screenX, screenY) {
+            if (disposed || failed || Vars.mobile || String(Core.input.getClass().getName()) != "arc.backend.sdl.SdlInput" || !java.lang.Thread.currentThread().equals(Core.app.getMainThread())) return false;
+            if (!isFinite(screenX) || !isFinite(screenY) || Core.graphics.getWidth() <= 0 || Core.graphics.getHeight() <= 0 || relative.active) return false;
+            try {
+                var SDL = Packages.arc.backend.sdl.jni.SDL, flags = SDL.SDL_GetWindowFlags(Core.app.getWindow());
+                if ((flags & SDL.SDL_WINDOW_INPUT_FOCUS) == 0 || (flags & SDL.SDL_WINDOW_MINIMIZED) != 0 || (relative.absoluteMode != null && !relative.absoluteMode())) return false;
+                if (fields == null) { fields = [Core.input.getClass().getDeclaredField("mouseX"), Core.input.getClass().getDeclaredField("mouseY")]; fields[0].setAccessible(true); fields[1].setAccessible(true); } // Проверяем доступ к кэшу Arc до физического переноса.
+                var x = Math.max(0, Math.min(Core.graphics.getWidth() - 1, Math.round(screenX))), y = Math.max(0, Math.min(Core.graphics.getHeight() - 1, Math.round(screenY)));
+                if (OS.isWindows) { if (nativeMove == null) prepareWindows(); if (!nativeMove(x, y)) return false; }
+                else if (relative.warpAbsolute == null || !relative.warpAbsolute(x, y)) return false; // Linux/macOS используют только уже проверенные экспорты игрового SDL.
+                fields[0].setInt(Core.input, x); fields[1].setInt(Core.input, y); return true; // Наведение и немедленный клик читают новую позицию, не дожидаясь события ОС.
+            } catch (error) { failed = true; Log.warn("BuildWheel: разовый сдвиг курсора недоступен: @", String(error)); return false; }
+        },
+        dispose: function() { disposed = true; nativeMove = null; if (arena != null) { try { closeArena(); } finally { arena = null; } } } // Обычное закрытие колеса не требует освобождать или захватывать курсор.
+    };
 };

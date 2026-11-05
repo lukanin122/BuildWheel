@@ -154,12 +154,13 @@ exports.create = function(api) {
     }
 
     function draw(element, wheelNumber, hoveredSector, selectedSector, options) {
-        var visual = options.useSharedVisual ? getDisplayVisual(wheelNumber) : getVisual(wheelNumber), appearance = visual.appearance; // Игровое колесо учитывает замок; «манекен» позволяет готовить собственный визуал выбранного номера.
+        var visual = options.visual || (options.useSharedVisual ? getDisplayVisual(wheelNumber) : getVisual(wheelNumber)), appearance = visual.appearance; // Сохранение может передать готовый визуал, не изменяя «манекен» и игровые комплекты.
         var sectorCount = visual.sectorCount, sectorAngle = 360 / sectorCount; // Количество секторов и их угол берём из этого же комплекта.
-        var radius = element.getWidth() / 2;
-        var centerX = element.x + radius;
+        var scale = options.previewScale == null ? 1 : options.previewScale, radius = options.previewScale == null ? element.getWidth() / 2 : appearance.diameter * scale / 2; // Превью уменьшает геометрию, сохраняя относительный размер разных диаметров.
+        var centerX = element.x + element.getWidth() / 2;
         var centerY = element.y + element.getHeight() / 2;
         var innerRadius = radius * appearance.innerRadiusRatio;
+        var visibleRadius = options.previewScale == null ? Infinity : Math.sqrt(element.getWidth() * element.getWidth() + element.getHeight() * element.getHeight()) / 2; // Окружность целиком за квадратом превью не требует построения линий.
 
         Draw.color(appearance.backgroundColor);
         Draw.alpha(appearance.backgroundAlpha);
@@ -181,21 +182,21 @@ exports.create = function(api) {
         Draw.color(appearance.centerColor);
         Draw.alpha(appearance.centerAlpha);
         Fill.circle(centerX, centerY, innerRadius);//Закрашиваем внутренний круг
-        if (appearance.innerLineWidth > 0 && innerRadius > 0) { // Рисуем внутреннюю окружность только при ненулевой толщине и положительном радиусе.
+        if (appearance.innerLineWidth > 0 && innerRadius > 0 && innerRadius - appearance.innerLineWidth * scale <= visibleRadius) { // Пропускаем скрытую окружность, в том числе целиком за квадратом превью.
             Draw.color(appearance.innerLineColor); // Выбираем цвет внутренней окружности из общих настроек.
             Draw.alpha(appearance.innerLineAlpha); // Устанавливаем её непрозрачность.
-            Lines.stroke(appearance.innerLineWidth); // Устанавливаем толщину её линии.
+            Lines.stroke(appearance.innerLineWidth * scale); // Толщина превью уменьшается вместе с диаметром.
             Lines.circle(centerX, centerY, innerRadius); // Обводим внутренний круг «колеса выбора» или «манекена».
         }
 
         // ОТРИСОВКА РАЗДЕЛИТЕЛЕЙ СЕКТОРОВ
         Draw.color(appearance.lineColor); // Выбираем цвет разделительных полос.
         Draw.alpha(appearance.lineAlpha); // Устанавливаем непрозрачность разделительных полос.
-        if (appearance.lineWidth > 0) Lines.stroke(appearance.lineWidth); // Задаём толщину, если разделители не скрыты нулевым значением.
+        if (appearance.lineWidth > 0) Lines.stroke(appearance.lineWidth * scale); // Толщина превью уменьшается вместе с диаметром.
 
         for (var sector = 0; sector < sectorCount; sector++) {
             var boundary = (sector * sectorAngle - sectorAngle / 2) * Math.PI / 180; // Получаем угол границы очередного сектора в радианах.
-            if (appearance.lineWidth > 0 && sectorCount > 1) { // У единственного сектора нет разделителя; нулевая толщина также скрывает линию, сохраняя отрисовку иконки.
+            if (appearance.lineWidth > 0 && sectorCount > 1 && innerRadius - appearance.lineWidth * scale <= visibleRadius) { // Не строим разделители, целиком находящиеся за границами превью.
                 Lines.line( // Соединяем точки на внутреннем и внешнем радиусах одной разделительной полосой.
                     centerX + Math.sin(boundary) * innerRadius, // Координата X начала линии у внутреннего круга.
                     centerY + Math.cos(boundary) * innerRadius, // Координата Y начала линии у внутреннего круга.
@@ -205,17 +206,19 @@ exports.create = function(api) {
             }
 
             //рисуем блоки в секторах (а если блока нет? - не рисуем)
-            var block = api.getBlock(wheelNumber, sector);
+            var block = options.blocks == null ? (options.visual == null ? api.getBlock(wheelNumber, sector) : null) : options.blocks[sector]; // Превью использует собственные блоки; отдельный визуал рисуется без иконок.
             if (block != null) {
                 var direction = sector * sectorAngle * Math.PI / 180; // угол на котором находятся иконки
                 var icon = block.uiIcon;
-                var iconSize = radius * appearance.iconSizeRatio * api.getIconScale(wheelNumber, sector);
+                var iconSize = radius * appearance.iconSizeRatio * (options.scales == null ? api.getIconScale(wheelNumber, sector) : options.scales[sector]);
                 var iconScale = iconSize / Math.max(icon.width, icon.height); // Сохраняем пропорции картинки возможной не квадратной картинки (на будущий функционал)
+                var iconX = centerX + Math.sin(direction) * radius * appearance.iconRadiusRatio, iconY = centerY + Math.cos(direction) * radius * appearance.iconRadiusRatio; // Координаты иконки общие для колеса и его уменьшенного вида.
+                if (options.previewScale != null && (iconX + icon.width * iconScale / 2 < element.x || iconX - icon.width * iconScale / 2 > element.x + element.getWidth() || iconY + icon.height * iconScale / 2 < element.y || iconY - icon.height * iconScale / 2 > element.y + element.getHeight())) continue; // Полностью обрезанная иконка не отправляется в Draw.
                 Draw.color(Color.white);
                 Draw.alpha(options.getIconAlpha == null ? 1 : options.getIconAlpha(block));//проверка разрешения строительства, если прозрачность не задана - не прозрачно, иначе ставим указанную
                 Draw.rect(icon,
-                    centerX + Math.sin(direction) * radius * appearance.iconRadiusRatio,
-                    centerY + Math.cos(direction) * radius * appearance.iconRadiusRatio,
+                    iconX,
+                    iconY,
                     icon.width * iconScale, icon.height * iconScale
                 ); //рисуем иконку по координатам и внужном масштабе
                 Draw.color(appearance.lineColor);
@@ -224,11 +227,11 @@ exports.create = function(api) {
         }
 
         // ОТРИСОВКА ВНЕШНЕЙ ОКРУЖНОСТИ
-        var outerRadius = radius - appearance.outerInset; // Смещаем окружность внутрь от края основного круга на заданный отступ.
-        if (appearance.outerWidth > 0 && outerRadius > 0) { // Пропускаем скрытую окружность и недопустимый радиус слишком маленького круга.
+        var outerRadius = radius - appearance.outerInset * scale; // Отступ превью уменьшается вместе с диаметром.
+        if (appearance.outerWidth > 0 && outerRadius > 0 && outerRadius - appearance.outerWidth * scale <= visibleRadius) { // Пропускаем скрытую окружность и линии целиком за квадратом превью.
             Draw.color(appearance.outerColor); // Выбираем собственный цвет внешней окружности.
             Draw.alpha(appearance.outerAlpha); // Устанавливаем её непрозрачность.
-            Lines.stroke(appearance.outerWidth); // Устанавливаем толщину внешней обводки.
+            Lines.stroke(appearance.outerWidth * scale); // Толщина превью уменьшается вместе с диаметром.
             Lines.circle(centerX, centerY, outerRadius); // Рисуем внешнюю окружность «колеса выбора» или «манекена».
         }
         Draw.reset(); // В Arc сбрасывает цвет, прозрачность и толщину линий для следующего элемента UI.
@@ -291,6 +294,7 @@ exports.create = function(api) {
         appearanceDefaults: appearanceDefaults, // Предоставляем исходные значения внешнего вида (цвета хранятся отдельными копиями).
         resetAppearance: resetAppearance, // Даём меню функцию восстановления выбранных параметров по их именам.
         sectorAt: sectorAt,
+        drawPreview: function(element, preview) { preview.previewScale = 0.9 * Math.min(element.getWidth(), element.getHeight()) / 260; draw(element, 0, -1, -1, preview); }, // Пассивная отрисовка без наведения, звуков, курсора и слушателей; диаметр 260 занимает 90% квадрата.
         createElement: createElement
     };
 };

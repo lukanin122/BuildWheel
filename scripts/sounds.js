@@ -10,8 +10,8 @@ exports.wheelOpen = Vars.tree.loadSound("wheel_open_1");
 if (!Vars.headless) exports.sectorHover.setMinInterval(0); // Не пропускаем быстрые переходы; на сервере не меняем общий Sounds.none.
 
 exports.play = function(sound, pitch) {
-    if (pitch == null && sound !== exports.wheelOpen) sound.play(Vars.control.sound.uiBus); // Прежние звуки сохраняют штатный вызов и его параметры.
-    else sound.play(Core.audio.sfxVolume, pitch == null ? 1 : pitch, 0, false, sound !== exports.wheelOpen, Vars.control.sound.uiBus); // Меняем только pitch; открытие не ограничиваем по частоте, чтобы быстрые смены номера тоже звучали.
+    var opening = sound === exports.wheelOpen, volume = Core.audio.sfxVolume * 0.5 * (opening ? 2 / 3 : 1); // Все звуки вдвое тише; открытие дополнительно умножаем на 2/3, сохраняя общую настройку SFX игры.
+    sound.play(volume, pitch == null ? 1 : pitch, 0, false, !opening, Vars.control.sound.uiBus); // Сохраняем pitch, панораму и канал UI; открытие не ограничиваем по частоте, чтобы быстрые смены номера тоже звучали.
 };
 
 var silentClick = new java.lang.Runnable({run: function() {}});

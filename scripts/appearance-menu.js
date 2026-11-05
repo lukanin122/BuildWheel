@@ -370,5 +370,19 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         return table; // Передаём меню форму для размещения под «манекеном».
     }
 
-    return {build: build, selectWheel: selectWheel, needsSave: needsSave, capture: capture, validSnapshot: validSnapshot, applySnapshot: applySnapshot}; // Меню переключает данные готовой формы и учитывает однократный перенос настроек при сохранении.
+    // ПОДГОТОВКА СОХРАНЁННОГО ВИЗУАЛА ДЛЯ БРАУЗЕРА
+    function previewSnapshot(data) { // Создаём только данные рисунка, без полей меню, ключей Settings и изменения «манекена».
+        if (!validSnapshot(data)) throw new Error("Сохранение содержит неверный визуал."); // Используем ту же проверку, что перед применением сохранения.
+        var result = Object.create(wheelView.appearanceDefaults); // Несохраняемые параметры читаются из заводского образца без отдельных копий Color.
+        for (var i = 0; i < fields.length; i++) { var field = fields[i]; result[field.key] = field.type == "color" ? Color.valueOf(data.appearance[field.key]) : data.appearance[field.key]; } // Читаем только известные проверенные поля, игнорируя посторонние ключи JSON.
+        return {appearance: result, sectorCount: data.sectorCount}; // HEX преобразуется один раз при подготовке видимого превью.
+    }
+
+    function defaultSnapshot() { // Пустая позиция набора получает заводской визуал, не затрагивая текущие колёса.
+        var data = {};
+        for (var i = 0; i < fields.length; i++) { var field = fields[i], value = wheelView.appearanceDefaults[field.key]; data[field.key] = field.type == "color" ? colorText(value) : Number(value); } // Формат совпадает с обычным сохранением визуала.
+        return {appearance: data, sectorCount: wheelView.defaultSectorCount};
+    }
+
+    return {build: build, selectWheel: selectWheel, needsSave: needsSave, capture: capture, validSnapshot: validSnapshot, applySnapshot: applySnapshot, previewSnapshot: previewSnapshot, defaultSnapshot: defaultSnapshot}; // Меню переключает данные готовой формы и учитывает однократный перенос настроек при сохранении.
 };
