@@ -128,7 +128,7 @@ Events.on(ClientLoadEvent, () => {
         try { sampled = relative.sample(relativeDelta); } catch (error) { closeWheel(); Log.warn("BuildWheel SDL: @", String(error)); return; } // Неожиданное исключение адаптера также освобождает режим.
         if (!sampled) { closeWheel(); return; } // Ошибка SDL не оставляет колесо со скрытым указателем.
         if (relativeDelta.x == 0 && relativeDelta.y == 0) return;
-        if (numberBadge.visible) hideWheelNumber(); // Учитываем настоящее движение, включая движение у края окна.
+        if (numberBadge.visible) requestNumberHide(); // Настоящее движение запускает задержку исчезновения номера один раз.
         var viewport = Core.scene.getViewport(); // Чувствительность выбрана как один логический пиксель на единицу SDL.
         moveVirtual(relativeDelta.x * viewport.getWorldWidth() / viewport.getScreenWidth(), -relativeDelta.y * viewport.getWorldHeight() / viewport.getScreenHeight()); // Меняем направление Y один раз; масштаб UI повторно не применяем.
     }
@@ -193,53 +193,72 @@ Events.on(ClientLoadEvent, () => {
     wheel.visible = false;
     wheel.touchable = Touchable.enabled; // 2) Колесо теперь участвует в проверке попадания мыши.
     Core.scene.root.addChild(wheel); //Прикрепляем объект wheel для сцены
-    var numberBadge = extend(Table, { // Номер — отдельная небольшая плашка поверх игрового колеса, без собственного update.
+    var numberBadge = extend(Table, { // Номер — отдельная надпись поверх игрового колеса, без собственного update.
         draw: function() {
             if (numberCursorHidden && invisibleCursor != null) { var current = gameCursor(); if (current != null && !java.util.Objects.equals(current, invisibleCursor)) numberPreviousCursor = current; Core.graphics.cursor(invisibleCursor); } // Сохраняем новое изображение игры перед временным скрытием.
-            this.super$draw(); // Плашка использует штатное рисование таблицы и надписи.
+            this.super$draw(); // Таблица рисует надпись штатным шрифтом с обводкой.
         }
     });
     numberBadge.name = "buildwheel-wheel-number-badge"; numberBadge.touchable = Touchable.disabled; numberBadge.visible = false; // Плашка не перехватывает выбор сектора мышью.
-    numberBadge.margin(5); // Небольшой отступ отделяет цифру от контрастного фона.
-    var numberLabel = numberBadge.add("", Styles.outlineLabel).minWidth(24).minHeight(24).get(); // Штатный шрифт с обводкой сохраняет читаемость номера.
+    numberBadge.margin(0); // Размер элемента определяется надписью; отдельный фон не создаётся.
+    var numberLabel = numberBadge.add("", Styles.outlineLabel).get(); // Штатный шрифт с обводкой сохраняет читаемость номера.
+    numberLabel.name = "buildwheel-wheel-number-label";
     numberLabel.setAlignment(Align.center); // Цифра располагается в середине плашки.
     var numberAnchorX = 0, numberAnchorY = 0, invisibleCursor = null, numberCursorHidden = false, numberCursorUnavailable = false; // Положение мыши запоминается при появлении номера.
+    var numberHideQueued = false, numberHideDelay = 0.4; // Первое движение назначает исчезновение; следующие движения не отодвигают срок.
     var cursorStateField = null, numberPreviousCursor = null; // Для временного прозрачного курсора сохраняем именно выбранное игрой изображение.
     try { cursorStateField = java.lang.Class.forName("arc.Graphics").getDeclaredField("lastCursor"); cursorStateField.setAccessible(true); } catch (ignored) {} // Отсутствие внутреннего поля не блокирует работу колеса.
     function gameCursor() { try { return cursorStateField == null ? null : cursorStateField.get(Core.graphics); } catch (ignored) { return null; } } // Сбой необязательного чтения не мешает освобождению ввода.
-    var numberDarkBackground = null, numberLightBackground = null; // Два фона создаются при первом показе и переиспользуются без новых объектов при переключении колёс.
 
-    // НОМЕР КОЛЕСА ДО ПЕРВОГО ДВИЖЕНИЯ МЫШИ
-    function hideWheelNumber() { // Вызывается движением мыши или закрытием колеса.
+    // НОМЕР КОЛЕСА И ЗАДЕРЖКА ЕГО СКРЫТИЯ
+    function hideWheelNumber() { // Вызывается после задержки, при переключении номера или закрытии колеса.
+        numberBadge.clearActions(); numberHideQueued = false; // Отменяем задержку прежнего номера при закрытии или переключении колеса.
         numberBadge.visible = false; // Скрытая плашка не рисуется и не обновляется.
         numberBadge.remove(); // Выключенная плашка отсутствует в сцене и не участвует даже в штатном обходе UI.
+        restoreNumberCursor(); // Возвращаем аппаратный курсор, если надпись временно закрывала его.
+        setMotionEnabled(wheelOpen && virtualActive); // Относительные события остаются захваченными до закрытия колеса.
+    }
+
+    function restoreNumberCursor() { // Восстановление картинки мыши не требует скрывать ещё читаемый номер.
         if (numberCursorHidden) { // Не перезаписываем курсор, который успела установить игра или другой мод.
             var current = gameCursor();
             if (current == null || java.util.Objects.equals(current, invisibleCursor)) { if (numberPreviousCursor != null) Core.graphics.cursor(numberPreviousCursor); else Core.graphics.restoreCursor(); }
             numberCursorHidden = false; numberPreviousCursor = null;
         }
-        setMotionEnabled(wheelOpen && virtualActive); // Относительные события остаются захваченными до закрытия колеса.
+    }
+
+    function requestNumberHide() { // Одна штатная Action обслуживает задержку после первого движения, без отдельного таймера или опроса.
+        if (!numberBadge.visible || numberHideQueued) return;
+        numberHideQueued = true;
+        numberBadge.addAction(Actions.sequence(Actions.delay(numberHideDelay), Actions.run(hideWheelNumber)));
     }
 
     function showWheelNumber() { // Рисуем только для настоящего «колеса выбора», не для «манекена».
         hideWheelNumber(); // Предыдущее появление не должно оставлять скрытый системный курсор.
-        if (!controls.showNumber || !wheelOpen) return; // Выключенная настройка не создаёт курсоров и фона.
+        if (!controls.showNumber || !wheelOpen) return; // Выключенная настройка не создаёт курсоров и надписи.
         numberLabel.setText(String(activeWheelNumber)); numberLabel.setColor(controls.numberColor); // Используем выбранный пользователем цвет текста.
-        if (numberDarkBackground == null) { numberDarkBackground = Tex.whiteui.tint(0, 0, 0, 0.78); numberLightBackground = Tex.whiteui.tint(1, 1, 1, 0.78); } // Фоны с разным контрастом создаются только один раз.
-        numberBadge.background(controls.numberDarkBackground ? numberDarkBackground : numberLightBackground); // Используем заранее рассчитанный контраст без новых объектов и вычисления яркости.
-        numberBadge.pack(); // Подгоняем рамку под одну цифру и отступы.
+        var radius = wheel.getWidth() / 2, innerRadius = radius * wheelView.getDisplayVisual(activeWheelNumber).appearance.innerRadiusRatio;
+        var font = numberLabel.getStyle().font, capHeight = font.getCapHeight() / font.getData().scaleY; // Получаем высоту заглавного символа при масштабе шрифта 1, не меняя общий Font.
+        numberLabel.setFontScale(Math.max(radius * 0.2, innerRadius * 0.8) / Math.max(1, capHeight)); // Высота символа равна большему из двух размеров, рассчитанных по радиусам.
+        numberBadge.pack(); // Подгоняем границы под масштабированную цифру.
         numberBadge.setPosition(wheel.x + wheel.getWidth() / 2 - numberBadge.getWidth() / 2, wheel.y + wheel.getHeight() / 2 - numberBadge.getHeight() / 2); // Привязываем плашку к центру колеса.
         Core.scene.root.addChild(numberBadge); numberBadge.visible = true; numberBadge.toFront(); // Один виджет рисуется поверх кольца и иконок всех десяти номеров.
-        setMotionEnabled(true); // Первое движение уберёт номер; при выключенных ограничениях обработчик затем будет удалён.
+        setMotionEnabled(true); // Первое движение начнёт задержку; после исчезновения ненужный обработчик будет удалён.
         numberAnchorX = Core.input.mouseX(); numberAnchorY = Core.input.mouseY(); // Синтетическое перемещение в эту же позицию не считается движением пользователя.
-        Core.scene.screenToStageCoordinates(cursorPoint.set(numberAnchorX, numberAnchorY)); // Проверяем, накладывается ли аппаратная мышь на плашку.
-        if (!virtualActive && !numberCursorUnavailable && cursorPoint.x >= numberBadge.x && cursorPoint.x <= numberBadge.getRight() && cursorPoint.y >= numberBadge.y && cursorPoint.y <= numberBadge.getTop()) { // В relative mode указатель уже скрыт самим SDL; этот путь нужен только обычной мыши.
+        syncNumberCursor(numberAnchorX, numberAnchorY);
+    }
+
+    function syncNumberCursor(screenX, screenY) { // Пока номер виден, скрываем обычную мышь только непосредственно под надписью.
+        if (virtualActive || !numberBadge.visible) return; // В relative mode аппаратную мышь скрывает SDL.
+        Core.scene.screenToStageCoordinates(cursorPoint.set(screenX, screenY));
+        if (cursorPoint.x < numberBadge.x || cursorPoint.x > numberBadge.getRight() || cursorPoint.y < numberBadge.y || cursorPoint.y > numberBadge.getTop()) { restoreNumberCursor(); return; }
+        if (!numberCursorHidden && !numberCursorUnavailable) {
             try {
                 if (invisibleCursor == null) { // Единственный прозрачный курсор создаём только при первом использовании настройки.
                     var pixel = new Pixmap(1, 1); pixel.fill(0); // Аппаратный курсор находится выше OpenGL; прозрачность позволяет цифре оставаться поверх него.
                     try { invisibleCursor = Core.graphics.newCursor(pixel, 0, 0); } finally { pixel.dispose(); } // Однопиксельная временная картинка больше не нужна.
                 }
-                if (invisibleCursor != null) { numberPreviousCursor = gameCursor(); Core.graphics.cursor(invisibleCursor); numberCursorHidden = true; } // Реальная мышь возвращается с прежним изображением при первом движении.
+                if (invisibleCursor != null) { numberPreviousCursor = gameCursor(); Core.graphics.cursor(invisibleCursor); numberCursorHidden = true; } // Прежняя картинка возвращается при выходе мыши из-под текста или скрытии номера.
                 else numberCursorUnavailable = true; // Backend без аппаратных курсоров больше не требует попыток создания.
             } catch (error) { // Плашка остаётся работоспособной и на backend без аппаратных курсоров.
                 numberCursorUnavailable = true; // Не повторяем неподдерживаемую операцию при каждом открытии колеса.
@@ -249,7 +268,7 @@ Events.on(ClientLoadEvent, () => {
 
     function mouseMotion(screenX, screenY) { // Одна проверка обслуживает mouseMoved и touchDragged. #ограничить курсор#
         if (virtualActive) { sampleRelative(); return true; } // Внутри режима движение получает только BuildWheel.
-        if (numberBadge.visible && (screenX != numberAnchorX || screenY != numberAnchorY)) hideWheelNumber(); // Даже небольшое реальное движение сразу убирает номер.
+        if (numberBadge.visible) { if (screenX != numberAnchorX || screenY != numberAnchorY) requestNumberHide(); syncNumberCursor(screenX, screenY); } // Задержка сохраняет читаемость цифры, а мышь вне надписи остаётся видимой.
         return false; // Неподдерживаемая платформа сохраняет обычное наведение.
     }
     Events.on(DisposeEvent, () => { // Освобождаем нативные ресурсы один раз при завершении игры.

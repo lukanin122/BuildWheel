@@ -31,16 +31,9 @@ exports.getControls = function() { // Создаём настройки один
         if (hex.length == 7 && hex.charAt(0) == "#") controls.numberColor.set(Color.valueOf(hex)); // Отдельный слайдер прозрачности для номера не требуется.
     } catch (error) { // Неизвестный HEX оставляет белый цвет.
     }
-    function updateNumberContrast() { // Подбираем фон номера только при загрузке или изменении цвета, а не при каждом открытии колеса.
-        function linear(value) { return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4); } // Учитываем воспринимаемую яркость RGB-канала.
-        var color = controls.numberColor; // Измеряем яркость собственного цвета текста.
-        controls.numberDarkBackground = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b) > 0.179; // Выбираем чёрный либо белый фон с большим контрастом к тексту.
-    }
-    updateNumberContrast(); // Готовим производный параметр один раз после чтения сохранённого цвета.
     controls.set = function(key, value) { // Поля формы меняют этот же объект, поэтому новое поведение действует сразу.
         if (key == "numberColor") { // Палитра выбора цвета возвращает объект Color.
             controls.numberColor.set(value); // Сохраняем ссылку на существующий цвет для номера.
-            updateNumberContrast(); // Последующее открытие номера использует готовый выбор контрастного фона.
             Core.settings.put(prefix + key, "#" + String(controls.numberColor.toString()).substring(0, 6).toUpperCase()); // Записываем только RGB.
         } else if (key == "edgeShift") { // Слайдер передаёт долю от нуля до единицы.
             controls.edgeShift = value; // Геометрия открытия читает уже готовое число.
@@ -79,6 +72,8 @@ exports.getControls = function() { // Создаём настройки один
 // явно переданные из main.js; обратного require("main") здесь нет.
 exports.create = function(api) {
     var controls = api.controls || exports.getControls(); // Главный скрипт и форма работают с одним набором настроек управления.
+    var wheelIcon = extend(Packages.arc.scene.style.TextureRegionDrawable, Core.atlas.find("buildwheel-icon_wheel"), {imageSize: function() { return 32; }}); // Штатное меню получает значок размером 32, независимо от разрешения исходного PNG.
+    var paletteIcon = Core.atlas.drawable("buildwheel-icon_color"); // Иконки из sprites переиспользуются кнопками редактора и игровых меню.
     var wheelView = api.wheelView; // Общая основа с игровым колесом; настройки внешнего вида не копируем.
     var wheelCount = wheelView.wheelCount; // Число номеров берём из общей основы колёс; у каждого номера свой комплект визуала.
     var settingsPrefix = "buildwheel.slot."; // Начало ключей Core.settings: отделяет наши настройки от настроек других модов.
@@ -106,7 +101,7 @@ exports.create = function(api) {
     var previewSize = 0; // Диаметр манекена в координатах сцены; берём из общих настроек колеса.
     var previewWidget, previewGroup, previewEditor; // Ссылки на сам «манекен», группу с его кнопками и таблицу с боковым слайдером.
     var previewCell, scaleSliderCell, sectorLabelCell, rightPanelCell; // Ячейки таблиц, размеры которых меняются вместе с диаметром «манекена».
-    var baseRightWidth = 0; // Минимальная ширина правой панели, необходимая для её надписей и полей настроек.
+    var baseRightWidth = 0; // Ширина правой панели определяется экраном и полями настроек; диаметр «манекена» её не увеличивает.
     var closeKeysCaptured = []; // Отметки клавиш закрытия; индексом служит ordinal() игрового KeyCode.
     var saves = null, lockButton = null, lockLabel = null; // Ссылки на браузер и кнопку закрепления текущей сборки меню.
     var previewRowCell = null; // Ячейка объединяет «манекен» и боковые кнопки, не сдвигая круг дополнительной колонкой.
@@ -527,7 +522,7 @@ exports.create = function(api) {
         clearSlotButton.setSize(crossSize, crossSize); // Задаём тот же размер кнопке удаления блока из сектора.
         clearSelectionButton.setPosition(previewSize - crossSize, previewSize - crossSize); // Ставим кнопку снятия выделения в правый верхний угол.
         clearSlotButton.setPosition(0, previewSize - crossSize); // Ставим кнопку удаления блока в левый верхний угол.
-        var rightWidth = Math.max(baseRightWidth, uiSize + 36 + toolsReserve * 2); // Выделяем ширину для «манекена», бокового слайдера и полей настроек.
+        var rightWidth = baseRightWidth; // Круг может выходить за края своей строки, не сдвигая номер колеса и палитру.
         sectorLabelCell.width(rightWidth); // Подгоняем ширину строки с названием выбранного сектора и блока.
         rightPanelCell.width(rightWidth); // Меняем ширину всей правой панели в основной таблице меню.
         previewRowCell.width(rightWidth).height(Math.max(uiSize, toolsHeight)); // Панель действий помещается по высоте, а «манекен» остаётся у прежнего верхнего края своей строки.
@@ -571,7 +566,7 @@ exports.create = function(api) {
         toggle.left(); // Сам значок переключателя также начинается у левого края, без центрирования внутри ячейки.
         toggle.name = "buildwheel-control-" + key; // Служебное имя настройки.
         toggle.setChecked(controls[key]); // Начальное состояние читаем из общего набора.
-        toggle.changed(() => { controls.set(key, toggle.isChecked()); settingsChanged = true; }); // Применяем новое поведение сразу и отмечаем запись при закрытии меню.
+        toggle.changed(() => { controls.set(key, toggle.isChecked()); if (key == "paletteInMenu") refreshDatabaseButtons(); settingsChanged = true; }); // Обновляем поведение и, при необходимости, состав «Базы данных».
         row.add(toggle).size(44).left(); // Не растягиваем checkbox до правого края панели.
         if (tooltip != null) addTooltip(toggle, tooltip); // Подсказка получает прежний штатный серый стиль.
     }
@@ -651,11 +646,11 @@ exports.create = function(api) {
     }
 
     function buildWheelKeys(layout) { // Номера 1–9,0 переносятся на следующую строку при нехватке места.
-        var table = new Table(), line = new Table(), occupied = layout.start; // Каждый ряд независим: широкая первая кнопка не растягивает цифровые кнопки нижних рядов.
+        var table = new Table(), line = new Table(), occupied = 0; // Каждый ряд независим: широкая первая кнопка не растягивает цифровые кнопки нижних рядов.
         table.left(); // Переносимые ряды начинаются от одного левого края.
-        line.left(); line.add().width(layout.start); // Первую кнопку начинаем в общей колонке управления.
+        line.left(); // Под отдельным заголовком кнопки колёс начинаются от левого края строки.
         keyButton(line, controls.bindings.wheelModifier, "Второстепенная", keyWide, "wheel-modifier", null); // Модификатор может быть отключён.
-        line.add("+").width(keySpace); // Знак вместе со свободным местом занимает одну цифровую ячейку.
+        line.add("+").width(keySize).padRight(4).get().setAlignment(Align.center); // Знак центрируется, а зазоры до рамок соседних кнопок становятся одинаковыми.
         occupied += keyWide + 4 + keySpace; // Учитываем кнопку, её отступы и знак плюс.
         for (var n = 1; n <= 10; n++) { // Используем привычный порядок стандартной клавиатуры.
             if (occupied + keySpace > layout.width) { table.add(line).width(layout.width).left().padBottom(5); table.row(); line = new Table(); line.left(); occupied = 0; } // Переносим кнопку целиком, сохраняя размер и резерв справа.
@@ -675,7 +670,7 @@ exports.create = function(api) {
         var required = (keyWide + 4) * 2 + keySpace + (reset ? resetSpace + keySpace : 0); // Размер комбинации известен заранее, включая все отступы.
         var row = controlRow(table, layout, title, required).table; // На узком экране подпись и комбинация занимают разные строки.
         keyButton(row, modifier, "Второстепенная", keyWide, name + "-modifier", null); // Отключённая второстепенная клавиша не требуется для срабатывания основной.
-        row.add("+").width(keySpace); // Знак с обоими отступами равен цифровой ячейке.
+        row.add("+").width(keySize).padRight(4).get().setAlignment(Align.center); // Свободное место до рамок соседних кнопок распределяется поровну.
         keyButton(row, primary, "Основная", keyWide, name + "-key", null); // Без основной клавиши действие выключено.
         if (reset) { row.add().width(resetSpace); resetKeyButton(row, [modifier, primary], name); } // Для меню восстанавливаем Ctrl + минус.
     }
@@ -710,7 +705,7 @@ exports.create = function(api) {
         table.add(buildWheelKeys(layout)).width(layout.width).left().padBottom(5); table.row(); // Включаем кнопку 0 в общий порядок переноса и соблюдаем правый резерв.
         buildKeyCombination(table, layout, "Радиальное меню", controls.bindings.menuModifier, controls.bindings.menuKey, true, "menu"); // Сброс этой строки не меняет клавиши колёс.
         buildKeyCombination(table, layout, "Палитра", controls.bindings.paletteModifier, controls.bindings.paletteKey, false, "palette"); // По умолчанию обе кнопки не назначены.
-        addControlToggle(table, layout, "Открывать палитру в главном меню", "paletteInMenu", null); // Разрешение применяется только к открытию палитры горячей клавишей.
+        addControlToggle(table, layout, "Открывать палитру в главном меню", "paletteInMenu", "Новый раздел в Базе данных. Комбинация быстрых клавиш для Палитры срабатывает и в главном меню."); // Управляем пунктом «Палитра» в «Базе данных» и её горячими клавишами в главном меню.
         var scrollRow = controlRow(table, layout, "Клавиша + колёсико мыши", keyWide + 4).table; // Прокрутке нужна только одна удерживаемая клавиша.
         keyButton(scrollRow, controls.bindings.scrollKey, "Основная", keyWide, "scroll-key", "Клавиша перехватывает 'Масштабирование' колёсиком, по умолчанию отключено."); // До назначения клавиши прокрутка остаётся обычной.
         var numberRow = controlRow(table, layout, "Отображать номер колеса", 44 + 8 + 132).table; // Номер и его цвет располагаются в одной строке.
@@ -745,8 +740,8 @@ exports.create = function(api) {
         previewSize = wheelView.getVisual(editedWheel).appearance.diameter; // «Манекен» получает размер из комплекта выбранного номера.
         var previewUiSize = previewSize / Scl.scl(); // Cell.size сам применит Scl: делим, чтобы размер не увеличился повторно.
         var appearanceWidth = Math.max(240, Math.min(contentWidth * 0.45 + 40, 600)); // Выбираем ширину формы по экрану (запас 40 распределяется между полями размера и HEX).
-        baseRightWidth = Math.max(contentWidth * 0.45, appearanceWidth); // Задаём минимальную ширину правой панели по экрану и форме настроек.
-        var rightWidth = Math.max(baseRightWidth, previewUiSize + 36 + toolsReserve * 2); // Выделяем место для «манекена» и 36 UI-единиц под боковой слайдер с отступом.
+        baseRightWidth = Math.max(contentWidth * 0.45, appearanceWidth); // Задаём ширину правой панели по экрану и форме настроек.
+        var rightWidth = baseRightWidth; // Большой «манекен» не растягивает панель и строку выбора номера.
         var listHeight = screenHeight * 0.46; // Высота прокручиваемого списка блоков — 46% высоты экрана.
         gridColumns = Math.max(1, Math.floor((listWidth - 24) / 52)); // 52 = кнопка 48 пикселей + отступы по 2 пикселя с обеих сторон; 24 резерв пикселей под край/прокрутку.
 
@@ -841,9 +836,9 @@ exports.create = function(api) {
         });
         var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
         wheelNumberRow.add(wheelSlider).growX().height(32); // Слайдер занимает всю ширину строки до кнопки справа.
-        wheelNumberRow.button("Палитра", Core.atlas.drawable("buildwheel-icon_color"), 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
+        wheelNumberRow.button("Палитра", paletteIcon, 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
             .width(144).height(44).name("buildwheel-open-palette"); // Закрепляем кнопку у правого края без всплывающей подсказки.
-        right.add(wheelNumberRow).growX().padTop(8).padBottom(8); // Отступ сверху сохраняет место под высокий стандартный бегунок слайдера.
+        right.add(wheelNumberRow).width(rightWidth).padTop(8).padBottom(8); // Фиксируем правый край строки, сохраняя место сверху под высокий стандартный бегунок.
         right.row();
 
         // ПРАВАЯ ЧАСТЬ: ТЕКСТОВАЯ СТРОКА ИМЕНИ БЛОКА СЕКТОРА
@@ -908,7 +903,7 @@ exports.create = function(api) {
 
     //Открытие всего меню
     function show(wheelNumber) {
-        if (!Vars.state.isGame() || dialog.isShown()) return; // Не открываем из главного меню и не создаём повторное открытие того же окна.
+        if (dialog.isShown()) return; // Редактор доступен и из «Базы данных» главного меню; повторное открытие не создаёт второе окно.
         // *Сохраняем номер ДО closeWheel/show: слушатель в main.js сбросит
         // *activeWheelNumber при открытии любого диалога, включая наше меню.
         editedWheel = validIndex(wheelNumber, wheelCount) ? wheelNumber : 1; // При открытом игровом колесе берём его номер, иначе начинаем с колеса 1.
@@ -953,12 +948,34 @@ exports.create = function(api) {
                 }
             } while (moved);
             var layer = new Table(); layer.bottom().left(); // Stack растягивает прозрачный слой вместе с окном при изменении разрешения.
-            var button = layer.button(Icon.commandRally, Styles.defaulti, openFromPause).size(70).padBottom(bottom / Scl.scl()).name("buildwheel-pause-settings").get(); // Рамка и размер соответствуют штатной кнопке; нажатие открывает настройки мода.
+            var button = layer.button(wheelIcon, Styles.defaulti, openFromPause).size(70).padBottom(bottom / Scl.scl()).name("buildwheel-pause-settings").get(); // Рамка и размер соответствуют штатной кнопке; нажатие открывает настройки мода.
+            button.getImageCell().size(32); // Размер изображения не зависит от разрешения PNG.
             addTooltip(button, "Радиальное меню"); // Общий стиль подсказок закрепляет текст под началом кнопки.
             stack.add(layer); // Не меняем содержимое, которое PausedDialog пересоздаёт при каждом показе.
             pauseButtonInstalled = true; // Раскладка сохраняется в слое, повторные открытия ничего не сканируют.
         });
     });
+
+    // ПУНКТЫ «РАДИАЛЬНОЕ МЕНЮ» И «ПАЛИТРА» В ШТАТНОЙ «БАЗЕ ДАННЫХ»
+    var databaseWheelButton = null, databasePaletteButton = null; // Определения создаются один раз и сохраняются при изменении списка.
+    function refreshDatabaseButtons() {
+        var menu = Vars.ui.menufrag; // Используем публичные определения кнопок главного меню Mindustry.
+        if (menu == null || menu.desktopButtons == null) return; // Мобильное меню и полностью заменённый интерфейс сохраняют свою структуру.
+        var entries = null;
+        for (var i = 0; i < menu.desktopButtons.size; i++) { var item = menu.desktopButtons.get(i); if (item != null && String(item.text) == "@database.button") { entries = item.submenu; break; } }
+        if (entries == null) return;
+        if (databaseWheelButton == null) { // Кнопки выполняют те же действия, что и существующие способы открытия.
+            var MenuButton = Packages.mindustry.ui.fragments.MenuFragment.MenuButton;
+            databaseWheelButton = new MenuButton("Радиальное меню", wheelIcon, () => show(editedWheel));
+            databasePaletteButton = new MenuButton("Палитра", paletteIcon, () => { api.closeWheel(); palette.show(); });
+        }
+        entries.remove(databaseWheelButton, true); entries.remove(databasePaletteButton, true); // Повторное обновление не оставляет дубликаты собственных пунктов.
+        var position = 0;
+        for (var i = 0; i < entries.size; i++) if (String(entries.get(i).text) == "@schematics") { position = i + 1; break; }
+        entries.insert(position, databaseWheelButton); // Ставим редактор сразу после «Схем», перед «Базой данных ядра».
+        if (controls.paletteInMenu) entries.insert(position + 1, databasePaletteButton); // Выключенный пункт отсутствует в списке; следующее открытие подменю читает его заново.
+    }
+    refreshDatabaseButtons(); // Первое построение учитывает сохранённое разрешение на открытие палитры.
 
     // Кнопка выхода
     dialog.buttons.button("Назад", Icon.left, () => hide()).size(200, 54).name("buildwheel-back");
