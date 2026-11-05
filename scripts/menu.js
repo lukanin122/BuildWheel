@@ -15,7 +15,7 @@ var controlsCache = null; // Один набор настроек использ
 exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
     if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
     var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
-    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false}; // Заводские значения десяти настроек левой части.
+    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
     for (var key in controls) { // Читаем переключатели и долю сдвига только при создании набора.
         try {
             if (key == "edgeShift") { // Единственное дробное значение задаёт отступ от краёв экрана.
@@ -563,6 +563,10 @@ exports.create = function(api) {
 
     function addControlToggle(table, layout, title, key, tooltip) { // Одинаковая строка подписи и штатного переключателя.
         var row = controlRow(table, layout, title, 44).table; // Все переключатели начинаются в общей колонке.
+        controlToggle(row, key, tooltip); // Одна подпись и один переключатель используют общий конструктор.
+    }
+
+    function controlToggle(row, key, tooltip) { // Позволяет расположить два стандартных переключателя в одной строке.
         var toggle = new CheckBox(""); // Используем обычный игровой checkbox без собственного рисования.
         toggle.left(); // Сам значок переключателя также начинается у левого края, без центрирования внутри ячейки.
         toggle.name = "buildwheel-control-" + key; // Служебное имя настройки.
@@ -685,7 +689,7 @@ exports.create = function(api) {
         }
         var table = new Table(); // Таблица располагается сразу под списком блоков.
         table.left(); // Сохраняем общий левый край списка и подписей настроек.
-        var titles = ["Сдвиг колеса при нехватке места: 100%", "Отключить \"категория/выбор блока №\"", "Ограничить курсор диаметром колеса", "Ограничить курсор внутренним кругом", "Выбор колеса", "Радиальное меню", "Палитра", "Открывать палитру в главном меню", "Клавиша + колёсико мыши", "Отображать номер колеса"]; // Учитываем все подписи и наибольшую длину процента сдвига.
+        var titles = ["Сдвиг колеса при нехватке места: 100%", "Отключить \"категория/выбор блока №\"", "Ограничить курсор диаметром колеса", "Ограничить курсор внутренним кругом", "Выбор колеса", "Радиальное меню", "Палитра", "Открывать палитру в главном меню", "Клавиша + колёсико мыши", "Отображать номер колеса", "Относительный ввод мыши для колёс"]; // Учитываем все подписи и наибольшую длину процента сдвига.
         var longest = 0, measure = new Label(""); // Один временный Label измеряет фактическую ширину игрового шрифта.
         for (var i = 0; i < titles.length; i++) { measure.setText(titles[i]); longest = Math.max(longest, measure.getPrefWidth() / Scl.scl()); } // Переводим измеренные пиксели в UI-единицы, как при расчёте ширины всей панели.
         var layout = {width: width - 18}; // Постоянно оставляем справа 18 UI-пикселей под полосу прокрутки.
@@ -698,7 +702,7 @@ exports.create = function(api) {
         shift.name = "buildwheel-control-edgeShift"; shift.setValue(Math.round(controls.edgeShift * 100), false); // Показываем сохранённое значение без события изменения.
         shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText("Сдвиг колеса при нехватке места: " + Math.round(value) + "%"); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
         shiftRow.table.add(shift).width(shiftWidth).height(44); // Заполняем остаток строки до резерва прокрутки, не превышая предельную длину.
-        addTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, телепортируя и положение мыши."); // Объясняем связь колеса и физического курсора.
+        addTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и виртуальный курсор. Работает при относительном вводе, в том числе с включённым ограничителем курсора."); // Объясняем совместное смещение колеса и его виртуального курсора.
         addControlToggle(table, layout, "Отключить \"категория/выбор блока №\"", "disableNumberKeys", "В Mindustry цифры 0-9 в настройках управления по умолчанию используются как быстрые клавиши выбора категорий и блоков, тем самым присваивая каждому блоку свой номер."); // По умолчанию цифровой выбор игры отключён.
         addControlToggle(table, layout, "Ограничить курсор диаметром колеса", "clipOuter", "Останавливает движение курсора за границу диаметра открытого колеса строительства у это самой границы."); // Ограничиваем расстояние от центра внешним радиусом.
         addControlToggle(table, layout, "Ограничить курсор внутренним кругом", "clipInner", "Останавливает движение курсора чуть за границей внутренного круга колеса строительства - для молниеносного выбора."); // При двух включённых границах действует меньшая окружность.
@@ -721,6 +725,9 @@ exports.create = function(api) {
         numberHex.setMaxLength(7); numberHex.setValidator(validNumberHex); numberHex.setProgrammaticChangeEvents(false); // Незаконченный ввод не применяется, длина ограничена форматом #RRGGBB.
         numberHex.changed(() => { if (validNumberHex(numberHex.getText())) { controls.set("numberColor", Color.valueOf(numberHex.getText())); settingsChanged = true; } }); // Допустимый RGB сразу меняет подчёркивание и цвет номера.
         numberRow.add(numberHex).width(132).height(44).padLeft(8); // Размер HEX совпадает с полем «Основного круга» в широкой правой форме.
+        var relativeRow = controlRow(table, layout, "Относительный ввод мыши для колёс", 88).table; // Новый раздел завершает левый список настроек.
+        controlToggle(relativeRow, "relativeMouse", "Relative Mouse Mode - Δx и Δy вместо абсолютного ввода."); // Основной режим не зависит от включения двух круговых ограничителей.
+        controlToggle(relativeRow, "customArrow", "Кастомная стрелка курсора - чтоб не путали когда нестандартный ввод."); // Выбор изображения действует и при relative mode, включённом ограничителями.
         return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
     }
 

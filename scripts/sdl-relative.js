@@ -72,11 +72,36 @@ exports.inspect = function(bytes) { // Ничего не загружает и �
     return {hash: hash, automatic: !fast, imageSize: imageSize, headersSize: headersSize, baseOffset: opt + 24, warpVariable: warpVariable, get: stub(cursorSlot - 56), set: stub(cursorSlot - 40), mode: stub(cursorSlot - 32), realGet: get, realSet: set, realMode: modes[0], getSlot: cursorSlot - 56, setSlot: cursorSlot - 40, modeSlot: cursorSlot - 32, anchor: exported("Java_arc_backend_sdl_jni_SDL_SDL_1SetCursor"), functions: functions, offset: offset}; // Замыкания используются только при проверке загруженного образа.
 };
 
-// FFM: ПОДГОТОВКА АДРЕСОВ И ВЛАДЕНИЕ ОТНОСИТЕЛЬНЫМ РЕЖИМОМ
+// LINUX: ПРОВЕРКА УЖЕ ЗАГРУЖЕННЫХ ЭКСПОРТОВ ПО КАРТЕ ПАМЯТИ
+exports.linuxImage = function(text, addresses, minimum) { // Ничего не загружает и не вызывает: проверяет адреса, найденные loaderLookup.
+    var mappings = [], lines = String(text).split(/\r?\n/); // procfs описывает отображения именно текущего процесса.
+    for (var i = 0; i < lines.length; i++) {
+        var m = /^([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+\S+\s+\S+\s+\d+\s*(.*)$/.exec(lines[i]);
+        if (m == null || m[3].indexOf("x") < 0 || m[4].charAt(0) != "/") continue; // Анонимные области и данные не служат адресами SDL.
+        var path = m[4].replace(/\\([0-7][0-7][0-7])/g, (all, code) => String.fromCharCode(parseInt(code, 8))); // procfs экранирует пробелы и обратную косую черту восьмеричными кодами.
+        if (path.indexOf(" (deleted)") >= 0) continue; // Не пытаемся подтверждать уже заменённую библиотеку.
+        mappings.push({start: parseInt(m[1], 16), end: parseInt(m[2], 16), path: path});
+    }
+    var owner = null, count = 0;
+    for (var key in addresses) {
+        var address = addresses[key], found = []; // Экспорты должны принадлежать одному исполняемому отображению, а не только совпадать именем файла.
+        if (!(address > 0 && address <= 9007199254740991 && Math.floor(address) == address)) throw new Error("SDL Linux: недопустимый адрес " + key);
+        for (var i = 0; i < mappings.length; i++) if (address >= mappings[i].start && address < mappings[i].end) found.push(mappings[i]);
+        if (found.length != 1) throw new Error("SDL Linux: неоднозначное отображение " + key);
+        var image = found[0];
+        if (owner != null && (image.path != owner.path || image.start != owner.start || image.end != owner.end)) throw new Error("SDL Linux: экспорты принадлежат разным экземплярам библиотеки");
+        owner = image; count++;
+    }
+    if (count < (minimum == null ? 7 : minimum) || owner == null) throw new Error("SDL Linux: неполный набор экспортов");
+    return owner;
+};
+
+// FFM: ПОДГОТОВКА ПЛАТФОРМЕННЫХ АДРЕСОВ И ОБЩЕЕ ВЛАДЕНИЕ РЕЖИМОМ
 exports.create = function() {
     var result = {available: false, active: false, reason: "неподдерживаемый backend"}, arena = null, owned = false; // Отказ оставляет обычный ввод и не включает прежний ограничитель.
+    var closing = false, disposing = false, releaseListener = null; // Отложенное освобождение Cocoa не разрешает повторный захват и сохраняет память FFM до завершения.
     result.begin = () => false; result.sample = () => false; result.end = () => true; result.dispose = () => {}; // Безопасные методы для других ОС, Java и backend.
-    if (!OS.isWindows || String(Core.input.getClass().getName()) != "arc.backend.sdl.SdlInput" || typeof Core.app.getWindow != "function") return result;
+    if ((!OS.isWindows && !OS.isLinux && !OS.isMac) || String(Core.input.getClass().getName()) != "arc.backend.sdl.SdlInput" || typeof Core.app.getWindow != "function") return result;
     try {
         var type = n => java.lang.Class.forName(n), F = Packages.java.lang.foreign, seg = type("java.lang.foreign.MemorySegment"), layout = type("java.lang.foreign.MemoryLayout"), look = type("java.lang.foreign.SymbolLookup"), arenas = type("java.lang.foreign.Arena"), linkerType = type("java.lang.foreign.Linker"); // Старые Java завершают подготовку здесь, до чтения нативной памяти.
         var address = F.ValueLayout.ADDRESS, integer = F.ValueLayout.JAVA_INT, byteLayout = F.ValueLayout.JAVA_BYTE; // ABI SDL2: bool/int/Uint32 имеют размер четыре байта.
@@ -89,59 +114,178 @@ exports.create = function() {
         var linker = linkerType.getMethod("nativeLinker", []).invoke(null, none), downcall = linkerType.getMethod("downcallHandle", [seg, type("java.lang.foreign.FunctionDescriptor"), type("[Ljava.lang.foreign.Linker$Option;")]);
         var options = java.lang.reflect.Array.newInstance(type("java.lang.foreign.Linker$Option"), 0); // Дополнительных режимов вызова не требуется.
         function bind(pointer, returns, args) { return downcall.invoke(linker, array([pointer, F.FunctionDescriptor.of(returns, args), options])); } // Адрес передаём только после всех проверок ниже.
-        function addr(p) { return Number(getAddress.invoke(p, none)); } // Адреса Windows x64 помещаются в точное целое JS до 2^53.
+        function addr(p) { return Number(getAddress.invoke(p, none)); } // Преобразуем адрес FFM в число; допустимый диапазон затем проверяет платформенный адаптер.
         var symbols = look.getMethod("loaderLookup", []).invoke(null, none), find = look.getMethod("find", [type("java.lang.String")]); // Ищем в уже загруженных JNI-библиотеках, не открывая второй экземпляр SDL.
         var anchor = find.invoke(symbols, ["Java_arc_backend_sdl_jni_SDL_SDL_1SetCursor"]).orElseThrow();
-        var kernel = F.SymbolLookup.libraryLookup("kernel32.dll", arena); // Штатные экспортированные функции Windows нужны лишь для установления подлинного загруженного файла.
-        var module = allocate.invoke(arena, [eight, eight]), path = allocate.invoke(arena, [new java.lang.Long("65536"), new java.lang.Long("2")]);
-        var moduleOf = bind(kernel.find("GetModuleHandleExW").orElseThrow(), integer, [integer, address, address]), filename = bind(kernel.find("GetModuleFileNameW").orElseThrow(), integer, [address, address, integer]);
-        if (Number(moduleOf.invokeWithArguments(array([new java.lang.Integer("6"), anchor, module]))) == 0) throw new Error("не найден загруженный модуль SDL"); // FROM_ADDRESS|UNCHANGED_REFCOUNT не меняет владение библиотекой.
-        var modulePointer = getPointer.invoke(module, [address, zero]), base = addr(modulePointer); // Это фактическая база с учётом ASLR.
-        var moduleInfo = allocate.invoke(arena, [new java.lang.Long("24"), eight]); // MODULEINFO x64 содержит подлинный размер образа, полученный от Windows.
-        var describe = bind(kernel.find("K32GetModuleInformation").orElseThrow(), integer, [address, address, address, integer]);
-        var process = ofAddress.invoke(null, [new java.lang.Long("-1")]); // Псевдодескриптор текущего процесса не требует открытия или закрытия HANDLE.
-        if (Number(describe.invokeWithArguments(array([process, modulePointer, moduleInfo, new java.lang.Integer("24")]))) == 0) throw new Error("не получены границы загруженного образа");
-        var liveSize = Number(getInt.invoke(moduleInfo, [integer, eight])); // Не доверяем размеру из файла при чтении живой памяти.
-        var length = Number(filename.invokeWithArguments(array([modulePointer, path, new java.lang.Integer("32768")]))); // UTF-16 путь именно загруженной DLL.
-        if (length <= 0 || length >= 32768) throw new Error("не получен путь SDL DLL");
-        var getString = seg.getMethod("getString", [java.lang.Long.TYPE, type("java.nio.charset.Charset")]), file = String(getString.invoke(path, [zero, java.nio.charset.StandardCharsets.UTF_16LE]));
-        var fileBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(file)), info = exports.inspect(fileBytes); // Хеш, PE и распознавание выполняются однократно.
-        if (liveSize != info.imageSize || addr(getPointer.invoke(moduleInfo, [address, zero])) != base) throw new Error("размер или база DLL на диске отличаются от загруженного образа");
-        if (addr(anchor) != base + info.anchor) throw new Error("JNI-якорь не совпадает с проверенным файлом");
-        function memory(r, size) { if (r < 0 || size < 0 || r + size > liveSize) throw new Error("чтение вне загруженного образа"); return reinterpret.invoke(ofAddress.invoke(null, [new java.lang.Long(String(base + r))]), [new java.lang.Long(String(size))]); } // Любой диапазон дополнительно ограничен настоящим размером Windows-модуля.
-        var liveHeaders = copy.invoke(memory(0, info.headersSize), [byteLayout]); // Первая страница заголовков отображена загрузчиком Windows.
-        var headerBase = 0; for (var i = 0; i < 8; i++) headerBase += (liveHeaders[info.baseOffset + i] & 255) * Math.pow(256, i); // Загрузчик Windows заменяет ImageBase фактической базой при ASLR.
-        if (headerBase != base) throw new Error("ImageBase загруженного PE не совпадает с Windows-модулем");
-        for (var i = 0; i < liveHeaders.length; i++) if ((i < info.baseOffset || i >= info.baseOffset + 8) && liveHeaders[i] != fileBytes[i]) throw new Error("заголовки загруженного PE не совпадают с файлом: 0x" + i.toString(16)); // Остальные поля и секции должны совпасть до чтения производных RVA.
-        function same(r, size) { var live = copy.invoke(memory(r, size), [byteLayout]), p = info.offset(r, size); for (var i = 0; i < size; i++) if (live[i] != fileBytes[p + i]) throw new Error("код загруженной DLL отличается от файла"); } // Выбранные RIP-relative тела не содержат ASLR-релокаций.
-        var names = [[info.get, info.getSlot, info.realGet], [info.set, info.setSlot, info.realSet], [info.mode, info.modeSlot, info.realMode]];
-        for (var i = 0; i < names.length; i++) { var n = names[i]; same(n[0], 7); same(n[2], info.functions[n[2]]); if (addr(getPointer.invoke(memory(n[1], 8), [address, zero])) != base + n[2]) throw new Error("SDL DynAPI перенаправлен в другое тело или библиотеку"); } // Чужой SDL_DYNAMIC_API не захватываем.
-        var set = bind(memory(info.set, 7), integer, [integer]), get = bind(memory(info.get, 7), integer, [address, address]), mode = bind(memory(info.mode, 7), integer, []); // Первый вызов приватного SDL разрешён только теперь.
-        var x = allocate.invoke(arena, [four, four]), y = allocate.invoke(arena, [four, four]), readArgs = array([integer, zero]), sampleArgs = array([x, y]); // Постоянные буферы исключают создание POINT/RECT и упаковку координат движения.
-        var on = array([new java.lang.Integer("1")]), off = array([new java.lang.Integer("0")]), SDL = Packages.arc.backend.sdl.jni.SDL, window = Core.app.getWindow();
-        var warpFlag = memory(info.warpVariable, 4); // Проверяется только при входе; эмуляция SDL через warp не заменяет требуемый нативный режим.
-        function focused() { var flags = SDL.SDL_GetWindowFlags(window); return (flags & SDL.SDL_WINDOW_INPUT_FOCUS) != 0 && (flags & SDL.SDL_WINDOW_MINIMIZED) == 0; } // Не захватываем ввод неактивного окна.
+        var SDL = Packages.arc.backend.sdl.jni.SDL, window = Core.app.getWindow(), readArgs = array([integer, zero]);
+        function windowsBindings() {
+            var kernel = F.SymbolLookup.libraryLookup("kernel32.dll", arena); // Штатные экспортированные функции Windows нужны лишь для установления подлинного загруженного файла.
+            var module = allocate.invoke(arena, [eight, eight]), path = allocate.invoke(arena, [new java.lang.Long("65536"), new java.lang.Long("2")]);
+            var moduleOf = bind(kernel.find("GetModuleHandleExW").orElseThrow(), integer, [integer, address, address]), filename = bind(kernel.find("GetModuleFileNameW").orElseThrow(), integer, [address, address, integer]);
+            if (Number(moduleOf.invokeWithArguments(array([new java.lang.Integer("6"), anchor, module]))) == 0) throw new Error("не найден загруженный модуль SDL"); // FROM_ADDRESS|UNCHANGED_REFCOUNT не меняет владение библиотекой.
+            var modulePointer = getPointer.invoke(module, [address, zero]), base = addr(modulePointer); // Это фактическая база с учётом ASLR.
+            var moduleInfo = allocate.invoke(arena, [new java.lang.Long("24"), eight]); // MODULEINFO x64 содержит подлинный размер образа, полученный от Windows.
+            var describe = bind(kernel.find("K32GetModuleInformation").orElseThrow(), integer, [address, address, address, integer]);
+            var process = ofAddress.invoke(null, [new java.lang.Long("-1")]); // Псевдодескриптор текущего процесса не требует открытия или закрытия HANDLE.
+            if (Number(describe.invokeWithArguments(array([process, modulePointer, moduleInfo, new java.lang.Integer("24")]))) == 0) throw new Error("не получены границы загруженного образа");
+            var liveSize = Number(getInt.invoke(moduleInfo, [integer, eight])); // Не доверяем размеру из файла при чтении живой памяти.
+            var length = Number(filename.invokeWithArguments(array([modulePointer, path, new java.lang.Integer("32768")]))); // UTF-16 путь именно загруженной DLL.
+            if (length <= 0 || length >= 32768) throw new Error("не получен путь SDL DLL");
+            var getString = seg.getMethod("getString", [java.lang.Long.TYPE, type("java.nio.charset.Charset")]), file = String(getString.invoke(path, [zero, java.nio.charset.StandardCharsets.UTF_16LE]));
+            var fileBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(file)), info = exports.inspect(fileBytes); // Хеш, PE и распознавание выполняются однократно.
+            if (liveSize != info.imageSize || addr(getPointer.invoke(moduleInfo, [address, zero])) != base) throw new Error("размер или база DLL на диске отличаются от загруженного образа");
+            if (addr(anchor) != base + info.anchor) throw new Error("JNI-якорь не совпадает с проверенным файлом");
+            function memory(r, size) { if (r < 0 || size < 0 || r + size > liveSize) throw new Error("чтение вне загруженного образа"); return reinterpret.invoke(ofAddress.invoke(null, [new java.lang.Long(String(base + r))]), [new java.lang.Long(String(size))]); } // Любой диапазон дополнительно ограничен настоящим размером Windows-модуля.
+            var liveHeaders = copy.invoke(memory(0, info.headersSize), [byteLayout]); // Первая страница заголовков отображена загрузчиком Windows.
+            var headerBase = 0; for (var i = 0; i < 8; i++) headerBase += (liveHeaders[info.baseOffset + i] & 255) * Math.pow(256, i); // Загрузчик Windows заменяет ImageBase фактической базой при ASLR.
+            if (headerBase != base) throw new Error("ImageBase загруженного PE не совпадает с Windows-модулем");
+            for (var i = 0; i < liveHeaders.length; i++) if ((i < info.baseOffset || i >= info.baseOffset + 8) && liveHeaders[i] != fileBytes[i]) throw new Error("заголовки загруженного PE не совпадают с файлом: 0x" + i.toString(16)); // Остальные поля и секции должны совпасть до чтения производных RVA.
+            function same(r, size) { var live = copy.invoke(memory(r, size), [byteLayout]), p = info.offset(r, size); for (var i = 0; i < size; i++) if (live[i] != fileBytes[p + i]) throw new Error("код загруженной DLL отличается от файла"); } // Выбранные RIP-relative тела не содержат ASLR-релокаций.
+            var names = [[info.get, info.getSlot, info.realGet], [info.set, info.setSlot, info.realSet], [info.mode, info.modeSlot, info.realMode]];
+            for (var i = 0; i < names.length; i++) { var n = names[i]; same(n[0], 7); same(n[2], info.functions[n[2]]); if (addr(getPointer.invoke(memory(n[1], 8), [address, zero])) != base + n[2]) throw new Error("SDL DynAPI перенаправлен в другое тело или библиотеку"); } // Чужой SDL_DYNAMIC_API не захватываем.
+            var set = bind(memory(info.set, 7), integer, [integer]), get = bind(memory(info.get, 7), integer, [address, address]), mode = bind(memory(info.mode, 7), integer, []); // Первый вызов приватного SDL разрешён только теперь.
+            var flag = memory(info.warpVariable, 4);
+            var nativeFunctions = {set: set, get: get, mode: mode, hash: info.hash, automatic: info.automatic, description: info.automatic ? "PE/DynAPI automatic" : "PE/DynAPI known", allowed: () => Number(getInt.invoke(flag, readArgs)) == 0};
+            info = null; fileBytes = null; names = null; liveHeaders = null; moduleOf = null; filename = null; describe = null; kernel = null;
+            return nativeFunctions;
+        }
+        function linuxBindings() { // Публичные SDL2-экспорты берём из зависимостей уже загруженного JNI-модуля.
+            if (!java.lang.Thread.currentThread().equals(Core.app.getMainThread())) throw new Error("SDL Linux: проверка окна требует основного потока Arc"); // Текущий GL-контекст хранится в TLS потока, создавшего окно игры.
+            var names = {set: "SDL_SetRelativeMouseMode", get: "SDL_GetRelativeMouseState", mode: "SDL_GetRelativeMouseMode", wasInit: "SDL_WasInit", currentWindow: "SDL_GL_GetCurrentWindow", version: "SDL_GetVersion"};
+            var pointers = {}, addresses = {};
+            for (var key in names) { pointers[key] = find.invoke(symbols, [names[key]]).orElseThrow(); addresses[key] = addr(pointers[key]); } // Отсутствие экспортов, в том числе у статической сборки, даёт безопасный отказ.
+            var maps = String(java.nio.file.Files.readString(java.nio.file.Paths.get("/proc/self/maps")));
+            var owner = exports.linuxImage(maps, addresses, 6); // Не используем dlopen("libSDL2.so"): второй экземпляр SDL не загружается.
+            exports.linuxImage(maps, {anchor: addr(anchor)}, 1); // JNI-якорь тоже должен находиться в доступном исполняемом образе.
+            var version = java.lang.reflect.Array.newInstance(java.lang.Integer.TYPE, 3); SDL.SDL_GetVersion(version);
+            if (version[0] != 2) throw new Error("SDL Linux: требуется ABI SDL2"); // Версия системной SDL может отличаться от Windows 2.32.8.
+            var wasInit = bind(pointers.wasInit, integer, [integer]), currentWindow = bind(pointers.currentWindow, address, []); // Getter без аргументов читает только собственное состояние SDL, не принимая чужой SDL_Window.
+            var expectedWindow = Number(window); // Адрес Arc нужен только для сравнения; нативному адаптеру его не передаём.
+            if (!(expectedWindow > 0 && expectedWindow <= 9007199254740991 && Math.floor(expectedWindow) == expectedWindow) || Core.app.getWindow() != window) throw new Error("SDL Linux: недопустимое или заменённое окно Arc");
+            if ((Number(wasInit.invokeWithArguments(array([new java.lang.Integer("32")]))) & 32) == 0) throw new Error("SDL Linux: видео игры не принадлежит найденной SDL");
+            if (addr(currentWindow.invokeWithArguments(none)) != expectedWindow) throw new Error("SDL Linux: текущий GL-контекст не принадлежит окну Arc"); // SDL возвращает собственное окно; сравнение адресов не разыменовывает окно Arc.
+            var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "Linux SDL2 " + version[0] + "." + version[1] + "." + version[2], image: owner.path, allowed: () => true}; // Публичный Linux API не раскрывает внутренний флаг warp fallback.
+            maps = null; addresses = null; pointers = null; names = null; return found; // Текст карты памяти не остаётся в рабочих замыканиях.
+        }
+        // MACOS: ЭКСПОРТЫ ЗАГРУЖЕННОЙ SDL И ПРОВЕРКА ОТЛОЖЕННОГО ВХОДА COCOA
+        function macBindings() {
+            if (!java.lang.Thread.currentThread().equals(Core.app.getMainThread()) || Number(layout.getMethod("byteSize", []).invoke(address, none)) != 8) throw new Error("SDL macOS: нужен основной поток и 64-битная JVM"); // Публичный MemoryLayout обходит закрытый класс реализации Java; AppKit вызывается только основным потоком.
+            var version = java.lang.reflect.Array.newInstance(java.lang.Integer.TYPE, 3); SDL.SDL_GetVersion(version);
+            if (version[0] != 2 || version[1] != 0 || version[2] != 16) throw new Error("SDL macOS: проверен Cocoa backend SDL 2.0.16"); // В другой версии сначала требуется проверить правила отложенного включения и ABI оконной информации.
+            var names = {set: "SDL_SetRelativeMouseMode", get: "SDL_GetRelativeMouseState", mode: "SDL_GetRelativeMouseMode", currentWindow: "SDL_GL_GetCurrentWindow", wasInit: "SDL_WasInit", mouseFocus: "SDL_GetMouseFocus", keyboardFocus: "SDL_GetKeyboardFocus", wmInfo: "SDL_GetWindowWMInfo", hint: "SDL_GetHintBoolean", clear: "SDL_ClearError", driver: "SDL_GetCurrentVideoDriver"};
+            var pointers = {}, symbolArgs = array([null]); // Поиск идёт только в уже загруженных JNI-библиотеках и их зависимостях.
+            function symbol(name) { symbolArgs[0] = name; return find.invoke(symbols, symbolArgs).orElseThrow(); }
+            for (var key in names) pointers[key] = symbol(names[key]);
+            var system = linkerType.getMethod("defaultLookup", []).invoke(linker, none), dladdr = bind(find.invoke(system, ["dladdr"]).orElseThrow(), integer, [address, address]); // Штатный dyld сообщает владельца адреса; новую SDL не загружаем.
+            var info = allocate.invoke(arena, [new java.lang.Long("32"), eight]), infoArgs = array([anchor, info]); // Dl_info содержит четыре 64-битных указателя.
+            var getString = seg.getMethod("getString", [java.lang.Long.TYPE]), stringSpace = new java.lang.Long("4096");
+            function number(p) { var n = addr(p); if (!(n > 0 && n <= 9007199254740991 && Math.floor(n) == n)) throw new Error("SDL macOS: недопустимый адрес"); return n; } // Не допускаем потери точности адреса при переходе в JavaScript.
+            function string(p) { number(p); return String(getString.invoke(reinterpret.invoke(p, [stringSpace]), [zero])); } // Строки принадлежат dyld, SDL или Objective-C runtime; чтение ограничено 4096 байтами.
+            function image(p, name) {
+                var value = number(p); infoArgs[0] = p;
+                if (Number(dladdr.invokeWithArguments(infoArgs)) == 0) throw new Error("SDL macOS: адрес не принадлежит загруженному образу");
+                var path = string(getPointer.invoke(info, [address, zero])), base = number(getPointer.invoke(info, [address, eight]));
+                if (name != null) { // Для экспортов дополнительно проверяем начало и имя символа, а не только ближайшую библиотеку.
+                    var label = string(getPointer.invoke(info, [address, new java.lang.Long("16")]));
+                    if (label.charAt(0) == "_") label = label.substring(1);
+                    if (label != name || number(getPointer.invoke(info, [address, new java.lang.Long("24")])) != value) throw new Error("SDL macOS: несовпадение символа " + name);
+                }
+                return {path: path, base: base};
+            }
+            var owner = image(anchor, "Java_arc_backend_sdl_jni_SDL_SDL_1SetCursor");
+            function sameImage(p, name) { var found = image(p, name); if (found.base != owner.base || found.path != owner.path) throw new Error("SDL macOS: найден другой образ SDL"); } // База dyld уже учитывает ASLR.
+            for (var key in names) sameImage(pointers[key], names[key]); // Ни одна найденная функция SDL ещё не вызывалась.
+            var currentWindow = bind(pointers.currentWindow, address, []), wasInit = bind(pointers.wasInit, integer, [integer]), driver = bind(pointers.driver, address, []);
+            var windowPointer = ofAddress.invoke(null, [new java.lang.Long(String(window))]), expectedWindow = number(windowPointer); // На этом этапе окно используется только как число для сравнения.
+            if ((Number(wasInit.invokeWithArguments(array([new java.lang.Integer("32")]))) & 32) == 0 || addr(currentWindow.invokeWithArguments(none)) != expectedWindow || string(driver.invokeWithArguments(none)) != "cocoa") throw new Error("SDL macOS: не подтверждено окно Arc в Cocoa");
+            var wmInfo = bind(pointers.wmInfo, integer, [address, address]), wm = allocate.invoke(arena, [new java.lang.Long("72"), eight]); // Публичный SDL_SysWMinfo: версия, subsystem и union размером 64 байта.
+            var wmBytes = seg.getMethod("asByteBuffer", []).invoke(wm, none).order(java.nio.ByteOrder.nativeOrder());
+            wmBytes.put(0, version[0]); wmBytes.put(1, version[1]); wmBytes.put(2, version[2]);
+            var wmArgs = array([windowPointer, wm]); // Указатель передаём SDL только после проверки её образа и собственного GL-окна.
+            function cocoaWindow() { if (Core.app.getWindow() != window || Number(wmInfo.invokeWithArguments(wmArgs)) != 1 || wmBytes.getInt(4) != 4) throw new Error("SDL macOS: недоступно окно Cocoa"); var p = getPointer.invoke(wm, [address, eight]); number(p); return p; }
+            var nsWindow = cocoaWindow(), nsAddress = number(nsWindow);
+            var objcNames = ["sel_registerName", "objc_msgSend", "object_getClass", "class_getInstanceMethod", "method_getTypeEncoding", "method_getImplementation"], objc = {}, objcOwner = null;
+            for (var i = 0; i < objcNames.length; i++) { // Objective-C runtime уже загружен AppKit; его файлы могут находиться только в dyld shared cache.
+                var name = objcNames[i], p = symbol(name), found = image(p, null);
+                if (found.path != "/usr/lib/libobjc.A.dylib" || (objcOwner != null && found.base != objcOwner)) throw new Error("SDL macOS: не подтверждён системный Objective-C runtime");
+                objcOwner = found.base; objc[name] = p;
+            }
+            var allocateString = arenas.getMethod("allocateFrom", [type("java.lang.String")]);
+            function text(value) { return allocateString.invoke(arena, [value]); } // C-строки и массивы аргументов создаются при подготовке, а не при движении.
+            var register = bind(objc.sel_registerName, address, [address]), send = bind(objc.objc_msgSend, address, [address, address]);
+            var selector = register.invokeWithArguments(array([text("delegate")])), pendingSelector = register.invokeWithArguments(array([text("isMovingOrFocusClickPending")]));
+            number(selector); number(pendingSelector);
+            var delegateArgs = array([nsWindow, selector]), listener = send.invokeWithArguments(delegateArgs); number(listener);
+            var classOf = bind(objc.object_getClass, address, [address]), methodOf = bind(objc.class_getInstanceMethod, address, [address, address]);
+            var encoding = bind(objc.method_getTypeEncoding, address, [address]), implementation = bind(objc.method_getImplementation, address, [address]);
+            var listenerArgs = array([listener]), listenerClass = classOf.invokeWithArguments(listenerArgs); number(listenerClass);
+            var method = methodOf.invokeWithArguments(array([listenerClass, pendingSelector])); number(method);
+            var methodArgs = array([method]), signature = string(encoding.invokeWithArguments(methodArgs));
+            if (!/^[cB]16@0:8$/.test(signature)) throw new Error("SDL macOS: неподдерживаемая сигнатура Cocoa listener"); // BOOL(self, selector): один байт результата и два указателя на обеих архитектурах.
+            var imp = implementation.invokeWithArguments(methodArgs); sameImage(imp, null); // Адрес метода получен из runtime и принадлежит проверенной SDL, а не угадан по смещению.
+            var pending = bind(objc.objc_msgSend, byteLayout, [address, address]), pendingArgs = array([listener, pendingSelector]); // Типизированная отправка сообщения сохраняет штатную диспетчеризацию Objective-C.
+            var mouseFocus = bind(pointers.mouseFocus, address, []), keyboardFocus = bind(pointers.keyboardFocus, address, []);
+            var hint = bind(pointers.hint, integer, [address, integer]), hintArgs = array([text("SDL_MOUSE_RELATIVE_MODE_WARP"), new java.lang.Integer("0")]);
+            var clear = downcall.invoke(linker, array([pointers.clear, F.FunctionDescriptor.ofVoid([]), options]));
+            function sameListener() {
+                if (!java.lang.Thread.currentThread().equals(Core.app.getMainThread()) || Core.app.getWindow() != window || addr(cocoaWindow()) != nsAddress) return false;
+                return addr(classOf.invokeWithArguments(listenerArgs)) == addr(listenerClass) && addr(implementation.invokeWithArguments(methodArgs)) == addr(imp);
+            }
+            function stable() {
+                if (!sameListener()) return false;
+                var current = send.invokeWithArguments(delegateArgs); // Проверяем свежий delegate перед использованием запомнённого обработчика.
+                return addr(current) == addr(listener) && Number(pending.invokeWithArguments(pendingArgs)) == 0;
+            }
+            var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "macOS Cocoa SDL2 2.0.16", image: owner.path};
+            found.ready = () => stable() && addr(mouseFocus.invokeWithArguments(none)) == expectedWindow && addr(keyboardFocus.invokeWithArguments(none)) == expectedWindow && Number(hint.invokeWithArguments(hintArgs)) == 0; // Отложенное включение и принудительный warp отвергаем до захвата.
+            found.beforeBegin = () => clear.invokeWithArguments(none); // Отделяем новую ошибку CoreGraphics от прежних сообщений SDL.
+            found.allowed = function() { var error = String(SDL.SDL_GetError()); found.rejection = "SDL Cocoa: " + (error.length > 0 ? error : "изменилось состояние оконного обработчика"); return error.length == 0 && stable(); }; // В SDL 2.0.16 ошибка native-пути сохраняется даже после успешного warp fallback.
+            found.valid = stable; // Замена окна, обработчика или ожидающий фокусный клик прекращают чтение относительного ввода.
+            var deferredEnd = false, releaseError = ""; // SDL не должен сбросить свой флаг раньше, чем Cocoa действительно сможет отключить нативный режим.
+            found.endReady = function() { if (!sameListener()) return true; if (Number(pending.invokeWithArguments(pendingArgs)) != 0) { deferredEnd = true; return false; } return !deferredEnd || addr(mouseFocus.invokeWithArguments(none)) == expectedWindow; }; // При pending ждём; замена внешнего delegate не мешает SDL освободить собственный обработчик.
+            found.beforeEnd = () => clear.invokeWithArguments(none);
+            found.checkEnd = function() { var error = String(SDL.SDL_GetError()); if (error.length > 0) releaseError = error; if (releaseError.length > 0) throw new Error("SDL Cocoa: освобождение не подтверждено: " + releaseError); deferredEnd = false; }; // SDL 2.0.16 способен скрыть ошибку выключения за успешным return; такую ошибку не забываем при повторе.
+            pointers = null; names = null; objc = null; objcNames = null; return found;
+        }
+        var nativeFunctions = OS.isWindows ? windowsBindings() : OS.isLinux ? linuxBindings() : macBindings();
+        var set = nativeFunctions.set, get = nativeFunctions.get, mode = nativeFunctions.mode;
+        var x = allocate.invoke(arena, [four, four]), y = allocate.invoke(arena, [four, four]), sampleArgs = array([x, y]); // Постоянные буферы исключают создание POINT/RECT и упаковку координат движения.
+        var asBuffer = seg.getMethod("asByteBuffer", []), xBuffer = asBuffer.invoke(x, none).order(java.nio.ByteOrder.nativeOrder()), yBuffer = asBuffer.invoke(y, none).order(java.nio.ByteOrder.nativeOrder()); // Представления той же памяти создаём один раз, чтобы читать числа без reflection на каждом кадре.
+        var on = array([new java.lang.Integer("1")]), off = array([new java.lang.Integer("0")]);
+        function focused() { if (Core.app.getWindow() != window) return false; var flags = SDL.SDL_GetWindowFlags(window); return (flags & SDL.SDL_WINDOW_INPUT_FOCUS) != 0 && (flags & SDL.SDL_WINDOW_MINIMIZED) == 0; } // Не используем старое окно при его замене и не захватываем неактивное.
+        function stopReleaseRetry() { if (releaseListener == null) return; var listener = releaseListener; releaseListener = null; Core.app.post(() => Core.app.removeListener(listener)); } // Удаление выполняется вне обхода слушателей приложения.
+        function retryRelease() { // Дополнительный update существует только на время отложенного закрытия Cocoa.
+            if (disposing || releaseListener != null) return;
+            releaseListener = extend(ApplicationListener, {update: function() { if (closing && !disposing) result.end(); }, resume: function() { if (closing && !disposing) result.end(); }});
+            Core.app.addListener(releaseListener);
+        }
         result.end = function() { // Вызывается также при исключении между включением режима и его подтверждением.
             if (!owned) return true;
             var failure;
-            for (var attempt = 0; attempt < 2; attempt++) try { if (Number(set.invokeWithArguments(off)) != 0 || Number(mode.invokeWithArguments(none)) != 0) throw new Error("SDL не освободил relative mode"); owned = false; result.active = false; return true; } catch (error) { failure = error; } // Идемпотентное отключение можно повторить при единичном сбое.
-            result.available = false; result.reason = String(failure); Log.err("BuildWheel: @", result.reason); return false; // Сохраняем дескрипторы для следующей попытки при потере фокуса или DisposeEvent.
+            for (var attempt = 0; attempt < 2; attempt++) try {
+                if (nativeFunctions.endReady != null && !nativeFunctions.endReady()) { closing = true; retryRelease(); return false; } // Cocoa pending возвращает ложный успех при выключении; сохраняем владение до настоящего освобождения.
+                if (nativeFunctions.beforeEnd != null) nativeFunctions.beforeEnd();
+                if (Number(set.invokeWithArguments(off)) != 0 || Number(mode.invokeWithArguments(none)) != 0) throw new Error("SDL не освободил relative mode");
+                if (nativeFunctions.checkEnd != null) nativeFunctions.checkEnd();
+                owned = false; result.active = false; closing = false; stopReleaseRetry(); return true;
+            } catch (error) { failure = error; } // Идемпотентное отключение можно повторить при единичном сбое.
+            closing = false; stopReleaseRetry(); result.available = false; // После ошибки прекращаем автоматические повторы; владение и дескрипторы остаются для явного освобождения.
+            var reason = String(failure); if (result.reason != reason) Log.err("BuildWheel: @", reason); result.reason = reason; return false; // Одинаковая ошибка не засоряет журнал при последующих событиях закрытия.
         };
         function fail(error) { result.available = false; result.reason = String(error); result.end(); Log.warn("BuildWheel SDL: @", result.reason); return false; } // Ошибка не включает старый Win32-ограничитель.
         result.begin = function() {
-            if (!result.available) return false;
-            try { if (!focused()) return false; if (owned) return result.active; if (Number(mode.invokeWithArguments(none)) != 0) return false; owned = true; if (Number(set.invokeWithArguments(on)) != 0 || Number(mode.invokeWithArguments(none)) != 1) throw new Error(String(SDL.SDL_GetError())); if (Number(getInt.invoke(warpFlag, readArgs)) != 0) throw new Error("SDL предложил эмуляцию через warp вместо нативного relative mode"); get.invokeWithArguments(sampleArgs); result.active = true; return true; } // Не забираем чужой режим и не принимаем эмуляцию; старое движение отбрасываем при своём входе.
+            if (!result.available || closing) return false;
+            try { if (!focused()) return false; if (owned) return result.active; if (Number(mode.invokeWithArguments(none)) != 0) return false; if (nativeFunctions.ready != null && !nativeFunctions.ready()) return false; if (nativeFunctions.beforeBegin != null) nativeFunctions.beforeBegin(); owned = true; result.active = true; if (Number(set.invokeWithArguments(on)) != 0 || Number(mode.invokeWithArguments(none)) != 1) throw new Error(String(SDL.SDL_GetError())); if (!nativeFunctions.allowed()) throw new Error(nativeFunctions.rejection || "SDL предложил эмуляцию через warp вместо нативного relative mode"); get.invokeWithArguments(sampleArgs); return true; } // Не забираем чужой режим; active также защищает незавершённый откат от открытия обычного колеса.
             catch (error) { return fail(error); }
         };
         result.sample = function(out) {
             if (!result.active) return false;
-            try { if (!focused() || Number(mode.invokeWithArguments(none)) != 1) { result.end(); return false; } get.invokeWithArguments(sampleArgs); out.set(Number(getInt.invoke(x, readArgs)), Number(getInt.invoke(y, readArgs))); return true; } // Один накопленный вектор на кадр; SDL Y направлен вниз.
+            try { if (!focused() || Number(mode.invokeWithArguments(none)) != 1) { result.end(); return false; } if (nativeFunctions.valid != null && !nativeFunctions.valid()) { result.end(); return false; } get.invokeWithArguments(sampleArgs); out.set(xBuffer.getInt(0), yBuffer.getInt(0)); return true; } // Один накопленный вектор на кадр; SDL Y направлен вниз.
             catch (error) { return fail(error); }
         };
-        result.dispose = function() { if (result.end() && arena != null) { close.invoke(arena, none); arena = null; result.available = false; } }; // Не закрываем память, пока не завершена попытка освобождения своего режима.
-        result.available = true; result.reason = ""; result.hash = info.hash; result.automatic = info.automatic; // Индексы PE и байты DLL после выхода не нужны обработчику движения.
-        Log.info("BuildWheel SDL: relative mode готов (@)", info.automatic ? "проверенный автоматический поиск" : "известная DLL");
-        info = null; fileBytes = null; names = null; liveHeaders = null; moduleOf = null; filename = null; describe = null; kernel = null; // Явно освобождаем ссылки: замыкания Rhino иначе могли бы удерживать мегабайты данных проверки.
+        result.dispose = function() { disposing = true; var released = result.end(); stopReleaseRetry(); if (released && arena != null) { close.invoke(arena, none); arena = null; } result.available = false; }; // После Dispose не опрашиваем окно; при незавершённом освобождении память остаётся до завершения процесса.
+        result.available = true; result.reason = ""; result.hash = nativeFunctions.hash; result.automatic = nativeFunctions.automatic; // Индексы PE и байты DLL после выхода не нужны обработчику движения.
+        Log.info("BuildWheel SDL: relative mode готов (@)", nativeFunctions.description);
     } catch (error) {
         result.available = false; result.active = false; result.reason = String(error); // Недоступность FFM, другая DLL или отличающийся машинный код дают безопасный отказ.
         if (arena != null) try { type("java.lang.foreign.Arena").getMethod("close", []).invoke(arena, []); arena = null; } catch (ignored) {} // До проверки адресов приватный режим ещё не включался.
