@@ -107,8 +107,8 @@ exports.create = function(api) { // Связываем обычные данны
 
     // ПОДГОТОВКА ПАССИВНОГО ПРЕВЬЮ БЕЗ ИЗМЕНЕНИЯ НАСТРОЕК
     function preview(type, data, number, member) { // Вызывается лениво, когда включённая карточка действительно попала в видимую область.
-        if (type === "wheels") { if (data == null || !Array.isArray(data.wheels) || data.wheels.length !== wheelCount || !validNumber(member)) throw new Error("Неверный набор колёс."); data = data.wheels[member]; type = "wheel"; } // Подготавливаем только одно видимое колесо набора.
-        if (!valid(type, data) || !validNumber(number)) throw new Error("Сохранение содержит неверные данные."); // Повреждённые цвета и размеры не попадают в общий код рисования.
+        if (type === "wheels") { if (data == null || !Array.isArray(data.wheels) || data.wheels.length !== wheelCount || !validNumber(member)) throw new Error(Core.bundle.get("buildwheel.error.invalid-set")); data = data.wheels[member]; type = "wheel"; } // Подготавливаем только одно видимое колесо набора.
+        if (!valid(type, data) || !validNumber(number)) throw new Error(Core.bundle.get("buildwheel.error.invalid-save")); // Повреждённые цвета и размеры не попадают в общий код рисования.
         var visual = api.wheelView.getVisual(number), saved = type === "visual" ? data : type === "wheel" ? data.visual : null; // Блоки без визуала используют собственный вид открытого «манекена».
         if (saved != null) visual = api.appearanceEditor.previewSnapshot(saved); // Редактор знает проверенные поля и технические значения по умолчанию; живые колёса не изменяются.
         var result = {visual: visual}, blocks = type === "blocks" ? data : type === "wheel" ? data.blocks : null; // Визуал без блоков не создаёт массив назначений.

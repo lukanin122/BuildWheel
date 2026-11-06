@@ -12,20 +12,20 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
 
     // СОСТАВ ГРУПП НАСТРОЕК
     var groups = [ // id — имя группы в коде; title — заголовок; metric — размер; color и alpha — имена параметров appearance.
-        {id: "background", title: "Основной круг", metric: {key: "diameter", label: "Диаметр", type: "number", min: 1, max: 4096, integer: true}, color: "backgroundColor", alpha: "backgroundAlpha"}, // Размер, цвет и прозрачность основного круга.
-        {id: "outer", title: "Внешняя окружность", metric: {key: "outerWidth", label: "Толщина", type: "number", min: 0, max: 256}, color: "outerColor", alpha: "outerAlpha"}, // Толщина, цвет и прозрачность внешней обводки.
-        {id: "dividers", title: "Разделительные полосы", metric: {key: "lineWidth", label: "Толщина", type: "number", min: 0, max: 256}, color: "lineColor", alpha: "lineAlpha"}, // Параметры линий между секторами.
-        {id: "center", title: "Внутренний круг", metric: {key: "innerRadiusRatio", label: "Доля", type: "ratio", min: 0, max: 1}, color: "centerColor", alpha: "centerAlpha"}, // Доля внутреннего радиуса, цвет и прозрачность центрального круга.
-        {id: "inner", title: "Внутренняя окружность", metric: {key: "innerLineWidth", label: "Толщина", type: "number", min: 0, max: 256}, color: "innerLineColor", alpha: "innerLineAlpha"}, // Параметры обводки внутреннего круга.
-        {id: "highlight", title: "Подсветка сектора", color: "highlightColor", alpha: "highlightAlpha"} // Цвет и прозрачность наведения (поле размера здесь не требуется).
+        {id: "background", title: Core.bundle.get("buildwheel.appearance.background.title"), metric: {key: "diameter", label: Core.bundle.get("buildwheel.appearance.background.metric.label"), type: "number", min: 1, max: 4096, integer: true}, color: "backgroundColor", alpha: "backgroundAlpha"}, // Размер, цвет и прозрачность основного круга.
+        {id: "outer", title: Core.bundle.get("buildwheel.appearance.outer.title"), metric: {key: "outerWidth", label: Core.bundle.get("buildwheel.appearance.outer.metric.label"), type: "number", min: 0, max: 256}, color: "outerColor", alpha: "outerAlpha"}, // Толщина, цвет и прозрачность внешней обводки.
+        {id: "dividers", title: Core.bundle.get("buildwheel.appearance.dividers.title"), metric: {key: "lineWidth", label: Core.bundle.get("buildwheel.appearance.dividers.metric.label"), type: "number", min: 0, max: 256}, color: "lineColor", alpha: "lineAlpha"}, // Параметры линий между секторами.
+        {id: "center", title: Core.bundle.get("buildwheel.appearance.center.title"), metric: {key: "innerRadiusRatio", label: Core.bundle.get("buildwheel.appearance.center.metric.label"), type: "ratio", min: 0, max: 1}, color: "centerColor", alpha: "centerAlpha"}, // Доля внутреннего радиуса, цвет и прозрачность центрального круга.
+        {id: "inner", title: Core.bundle.get("buildwheel.appearance.inner.title"), metric: {key: "innerLineWidth", label: Core.bundle.get("buildwheel.appearance.inner.metric.label"), type: "number", min: 0, max: 256}, color: "innerLineColor", alpha: "innerLineAlpha"}, // Параметры обводки внутреннего круга.
+        {id: "highlight", title: Core.bundle.get("buildwheel.appearance.highlight.title"), color: "highlightColor", alpha: "highlightAlpha"} // Цвет и прозрачность наведения (поле размера здесь не требуется).
     ];
     var fields = []; // Общий список описаний всех полей для загрузки сохранённых значений.
     for (var g = 0; g < groups.length; g++) { // По очереди готовим каждую группу.
         var group = groups[g]; // Берём описание текущей группы из массива.
         group.fields = []; // Отдельный список её параметров (используется при сбросе группы).
-        if (group.metric != null) group.fields.push(group.metric); // Добавляем размер, если он предусмотрен у этой группы.
-        group.colorField = {key: group.color, label: "Цвет", type: "color"}; // Описываем текстовое поле HEX.
-        group.alphaField = {key: group.alpha, label: "Прозр.", type: "alpha", min: 0, max: 1}; // Описываем слайдер прозрачности.
+        if (group.metric != null) { group.metric.tooltipKey = "buildwheel.appearance." + group.id + ".metric.tooltip"; group.metric.valueKey = "buildwheel.appearance." + group.id + ".metric.value"; group.fields.push(group.metric); } // Добавляем размер, если он предусмотрен у этой группы.
+        group.colorField = {key: group.color, label: Core.bundle.get("buildwheel.appearance." + group.id + ".color.label"), type: "color", tooltipKey: "buildwheel.appearance." + group.id + ".color.tooltip"}; // Описываем текстовое поле HEX.
+        group.alphaField = {key: group.alpha, label: Core.bundle.get("buildwheel.appearance." + group.id + ".alpha.label"), type: "alpha", min: 0, max: 1, tooltipKey: "buildwheel.appearance." + group.id + ".alpha.tooltip", valueKey: "buildwheel.appearance." + group.id + ".alpha.value"}; // Описываем слайдер прозрачности.
         group.fields.push(group.colorField, group.alphaField); // Включаем цвет и прозрачность в групповой сброс.
         for (var f = 0; f < group.fields.length; f++) fields.push(group.fields[f]); // Собираем параметры всех групп в общий список.
     }
@@ -171,7 +171,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
             control.setValidator(text => !isNaN(parseNumber(field, text))); // Сообщаем TextField, допустим ли текущий текст (неверное значение не применяется).
             control.setProgrammaticChangeEvents(false); // setText из кода не должен повторно запускать обработчик пользовательского ввода.
             control.changed(() => applyNumber(field, parseNumber(field, control.getText()))); // При вводе разбираем текст и применяем допустимое число.
-            addTooltip(control, "От " + field.min + " до " + field.max + (field.integer ? "; целое число" : "; можно дробное число с точкой")); // Показываем диапазон и разрешённый формат числа.
+            addTooltip(control, Core.bundle.format(field.tooltipKey, String(field.min), String(field.max))); // Показываем диапазон и разрешённый формат числа.
             sync = () => control.setText(numberText(appearance[field.key])); // Подготавливаем обновление текста после сброса этой группы.
         } else if (field.type == "color") { // Цвет задаётся строкой HEX.
             control = new TextField(colorText(appearance[field.key])); // Показываем текущий цвет с начальным #.
@@ -186,7 +186,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
                 saveField(field); // Сохраняем принятый цвет в памяти настроек игры.
                 onChanged(false); // Сообщаем меню об изменении (пересчитывать диаметр не требуется).
             });
-            addTooltip(control, "Цвет в формате #RRGGBB, например #7D4DFF"); // Подсказываем нужную запись цвета.
+            addTooltip(control, Core.bundle.get(field.tooltipKey)); // Подсказываем нужную запись цвета.
             sync = () => control.setText(colorText(appearance[field.key])); // Подготавливаем показ текущего цвета после сброса.
         } else { // Доля внутреннего радиуса и прозрачность задаются слайдерами.
             control = new Slider(0, 1, 0.01, false); // Создаём горизонтальный слайдер от 0 до 1 с шагом 0.01.
@@ -197,15 +197,14 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
             };
             visuals.sliders.push(updateColor); // Запоминаем обновление окраски для последующих изменений HEX этой группы.
             var updateLabel = () => label.setText(field.type == "ratio" // Выбираем текст подписи по назначению слайдера.
-                ? "Доля: " + Math.round(control.getValue() * 100) + "%" // Долю радиуса показываем в процентах.
-                : "Прозр.: " + Number(control.getValue()).toFixed(2)); // Прозрачность показываем числом с двумя знаками после точки.
+                ? Core.bundle.format(field.valueKey, String(Math.round(control.getValue() * 100))) // Долю радиуса показываем в процентах.
+                : Core.bundle.format(field.valueKey, Number(control.getValue()).toFixed(2))); // Прозрачность показываем числом с двумя знаками после точки.
             control.moved(value => { // Реагируем на изменение положения бегунка.
                 applyNumber(field, Number(value)); // Применяем новое значение к общему внешнему виду обоих колёс.
                 updateColor(); // Сразу меняем видимость дорожки и бегунка «Прозр.» вслед за его значением.
                 updateLabel(); // Показываем новое число рядом с названием слайдера.
             });
-            addTooltip(control, field.type == "ratio" ? "Доля внутреннего радиуса: 0–100%" // Для доли поясняем диапазон процентов.
-                : "Прозрачность: 0 — невидимо, 1 — полностью непрозрачно"); // Для прозрачности поясняем смысл крайних значений.
+            addTooltip(control, Core.bundle.get(field.tooltipKey)); // Описание поля задаёт диапазон доли или смысл крайних значений прозрачности.
             sync = () => { // Подготавливаем обновление слайдера после сброса группы.
                 control.setValue(appearance[field.key], false); // Переставляем бегунок без повторного применения настройки.
                 updateColor(); // Возвращаем цвет и видимость слайдера к текущим параметрам после сброса.
@@ -254,7 +253,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
             onChanged(group.metric != null && group.metric.key == "diameter"); // Помечаем настройки изменёнными; для диаметра также обновляем размеры обоих колёс.
         }).size(widths.reset, 44).name("buildwheel-appearance-reset-" + group.id).get(); // Задаём размер, служебное имя и получаем объект кнопки.
         reset.resizeImage(24); // Задаём размер значка refresh внутри кнопки.
-        addTooltip(reset, "Сбросить по умолчанию"); // Показываем действие кнопки при наведении.
+        addTooltip(reset, Core.bundle.get("buildwheel.actions.reset-defaults")); // Показываем действие кнопки при наведении.
 
         table.add(metric).width(widths.metric).padRight(6).top(); // Слева ставим размер; справа от него оставляем зазор.
         table.add(color).width(widths.color).top(); // Следом размещаем HEX-поле.
@@ -294,7 +293,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         var synchronize = () => { // Обновляем эту же строку при смене номера и применении сохранённого визуала.
             var count = wheelView.getVisual(editedWheel).sectorCount; // Получаем число секторов собственного визуала выбранного номера.
             slider.setValue(count, false); // Синхронизация не считается пользовательским изменением и не вызывает сохранение повторно.
-            label.setText("Число секторов: " + count); // Показываем точное целое значение рядом со слайдером.
+            label.setText(Core.bundle.format("buildwheel.appearance.sector-count", String(count))); // Показываем точное целое значение рядом со слайдером.
         };
         slider.moved(value => { // Обрабатываем только изменение целого шага слайдера.
             var visual = wheelView.getVisual(editedWheel), count = Math.round(value); // Получаем действующий комплект и выбранное число секторов.
@@ -302,10 +301,10 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
             var previousCount = visual.sectorCount; // Меню сохранит длину прежнего списка блоков перед скрытием лишних секторов.
             visual.sectorCount = count; // И «манекен», и игровое колесо читают геометрию из этого комплекта.
             Core.settings.put(settingsPrefix + editedWheel + ".sectorCount", new java.lang.Integer(String(count))); // Сохраняем отдельное число секторов этого номера.
-            label.setText("Число секторов: " + count); // Подпись меняется сразу при перемещении бегунка.
+            label.setText(Core.bundle.format("buildwheel.appearance.sector-count", String(count))); // Подпись меняется сразу при перемещении бегунка.
             onChanged(false, previousCount); // Помечаем настройки изменёнными и просим меню обновить выделение и название сектора.
         });
-        addTooltip(slider, "От " + sectorCountField.min + " до " + sectorCountField.max); // При исходном пределе подсказка показывает «От 1 до 16».
+        addTooltip(slider, Core.bundle.format("buildwheel.appearance.sector-count.tooltip", String(sectorCountField.min), String(sectorCountField.max))); // При исходном пределе подсказка показывает «От 1 до 16».
         row.add(slider).width(widths.alpha).height(44).padLeft(wide ? 6 : 0); // Ширина и начало ползунка совпадают с колонкой «Прозр.» группы выше.
         row.add().width(widths.reset).padLeft(6); // Оставляем пустое место под колонкой refresh, сохраняя выравнивание слайдера.
         synchronizeGroups.push(synchronize); // Не пересоздаём строку при переключении номера колеса.
@@ -372,7 +371,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
 
     // ПОДГОТОВКА СОХРАНЁННОГО ВИЗУАЛА ДЛЯ БРАУЗЕРА
     function previewSnapshot(data) { // Создаём только данные рисунка, без полей меню, ключей Settings и изменения «манекена».
-        if (!validSnapshot(data)) throw new Error("Сохранение содержит неверный визуал."); // Используем ту же проверку, что перед применением сохранения.
+        if (!validSnapshot(data)) throw new Error(Core.bundle.get("buildwheel.error.invalid-appearance")); // Используем ту же проверку, что перед применением сохранения.
         var result = Object.create(wheelView.appearanceDefaults); // Несохраняемые параметры читаются из заводского образца без отдельных копий Color.
         for (var i = 0; i < fields.length; i++) { var field = fields[i]; result[field.key] = field.type == "color" ? Color.valueOf(data.appearance[field.key]) : data.appearance[field.key]; } // Читаем только известные проверенные поля, игнорируя посторонние ключи JSON.
         return {appearance: result, sectorCount: data.sectorCount}; // HEX преобразуется один раз при подготовке видимого превью.

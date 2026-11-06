@@ -49,13 +49,13 @@ exports.getControls = function() { // Создаём настройки один
         return KeyBind.add("buildwheel-" + name, defaultKey, "buildwheel"); // Конструктор сразу восстанавливает сохранённую клавишу либо использует исходную.
     }
     Core.bundle.getProperties().put("category.buildwheel.name", "BuildWheel"); // Собственные действия также доступны в стандартном списке управления игры.
-    bindings.wheelModifier = binding("wheel-modifier", "Выбор колеса: Второстепенная", KeyCode.controlLeft); // Ctrl по умолчанию заменяет тестовый Shift.
-    for (var n = 0; n < 10; n++) bindings.wheels[n] = binding("wheel-" + n, "Колесо " + n, KeyCode.valueOf("num" + n)); // Каждое колесо получает собственную переназначаемую основную клавишу.
-    bindings.menuModifier = binding("menu-modifier", "Радиальное меню: Второстепенная", KeyCode.controlLeft); // Исходный модификатор меню — Ctrl.
-    bindings.menuKey = binding("menu-key", "Радиальное меню: Основная", KeyCode.minus); // Исходная основная клавиша меню — минус.
-    bindings.paletteModifier = binding("palette-modifier", "Палитра: Второстепенная", KeyCode.unset); // Без модификатора достаточно назначенной основной клавиши.
-    bindings.paletteKey = binding("palette-key", "Палитра: Основная", KeyCode.unset); // Палитра не имеет горячей клавиши до назначения пользователем.
-    bindings.scrollKey = binding("scroll-key", "Клавиша + колёсико мыши", KeyCode.unset); // Caps Lock больше не назначен по умолчанию.
+    bindings.wheelModifier = binding("wheel-modifier", Core.bundle.get("buildwheel.controls.bind.wheel-modifier"), KeyCode.controlLeft); // Ctrl по умолчанию заменяет тестовый Shift.
+    for (var n = 0; n < 10; n++) bindings.wheels[n] = binding("wheel-" + n, Core.bundle.format("buildwheel.controls.wheel-binding", n), KeyCode.valueOf("num" + n)); // Каждое колесо получает собственную переназначаемую основную клавишу.
+    bindings.menuModifier = binding("menu-modifier", Core.bundle.get("buildwheel.controls.bind.menu-modifier"), KeyCode.controlLeft); // Исходный модификатор меню — Ctrl.
+    bindings.menuKey = binding("menu-key", Core.bundle.get("buildwheel.controls.bind.menu-key"), KeyCode.minus); // Исходная основная клавиша меню — минус.
+    bindings.paletteModifier = binding("palette-modifier", Core.bundle.get("buildwheel.controls.bind.palette-modifier"), KeyCode.unset); // Без модификатора достаточно назначенной основной клавиши.
+    bindings.paletteKey = binding("palette-key", Core.bundle.get("buildwheel.controls.bind.palette-key"), KeyCode.unset); // Палитра не имеет горячей клавиши до назначения пользователем.
+    bindings.scrollKey = binding("scroll-key", Core.bundle.get("buildwheel.controls.scroll-key"), KeyCode.unset); // Caps Lock больше не назначен по умолчанию.
     controls.bindings = bindings; // Обработчики main.js читают текущие значения этих же KeyBind.
     controls.key = function(bind) { return bind.value == null || bind.value.key == null ? KeyCode.unset : bind.value.key; }; // Отключённое назначение представляется единым KeyCode.unset.
     controlsCache = controls; // Скрытые меню не создают вторых наборов параметров и обработчиков.
@@ -85,10 +85,10 @@ exports.create = function(api) {
     var editedSector = -1; // Редактируемый 'зелёный' сектор 0–7, дефолт -1
     var category = null; // null — вкладка категории «Всё», без фильтра по типам блоков. Она выбрана изначально.
     var searchText = ""; // Сохраняем запрос, чтобы восстановить поле после изменения размера окна.
-    var directionNames = ["Север", "Северо-восток", "Восток", "Юго-восток",
-        "Юг", "Юго-запад", "Запад", "Северо-запад"];
+    var directionNames = [Core.bundle.get("buildwheel.menu.direction.north"), Core.bundle.get("buildwheel.menu.direction.northeast"), Core.bundle.get("buildwheel.menu.direction.east"), Core.bundle.get("buildwheel.menu.direction.southeast"),
+        Core.bundle.get("buildwheel.menu.direction.south"), Core.bundle.get("buildwheel.menu.direction.southwest"), Core.bundle.get("buildwheel.menu.direction.west"), Core.bundle.get("buildwheel.menu.direction.northwest")];
 
-    var dialog = new BaseDialog("Радиальное меню"); // Объект - окно "меню настроек"
+    var dialog = new BaseDialog(Core.bundle.get("buildwheel.menu.radial-title")); // Объект - окно "меню настроек"
     var grid, blockPane, searchField, sectorLabel, wheelLabel, scaleLabel; // Ссылки на виджеты: присвоим их при построении содержимого окна.
     var wheelSlider, scaleSlider, clearSelectionButton, clearSlotButton;
     var blockButtons = []; // Записи {button, block}: помогают обновлять выделение без пересоздания списка.
@@ -193,7 +193,7 @@ exports.create = function(api) {
         capture: type => snapshots.capture(type, editedWheel), // Сохранение берёт собственные данные выбранного номера, не закреплённый игровой образец.
         preview: (entry, member) => snapshots.preview(entry.type, entry.data, editedWheel, member), drawPreview: wheelView.drawPreview, wheelIcon: wheelIcon, emptyWheel: snapshots.emptyWheel, // Браузер получает общий рисунок и данные сохранений, не создавая интерактивных колёс.
         apply: function(entry, number) { // Вызывается только после штатного подтверждения пользователем.
-            if (!snapshots.valid(entry.type, entry.data)) { Vars.ui.showInfo("Сохранение содержит неверные данные."); return; } // Повреждённый набор не должен применяться частично.
+            if (!snapshots.valid(entry.type, entry.data)) { Vars.ui.showInfo(Core.bundle.get("buildwheel.menu.invalid-save")); return; } // Повреждённый набор не должен применяться частично.
             editedSector = -1; applyingSavedData = true; // Прежнее выделение сбрасываем; промежуточные диаметры не перестраивают меню.
             try { snapshots.apply(entry.type, entry.data, number); } finally { applyingSavedData = false; } // Все данные проверены до изменения первого номера.
             settingsChanged = true; // Изменены действующие настройки, а не запись в библиотеке.
@@ -218,7 +218,7 @@ exports.create = function(api) {
         var pinned = wheelView.getSharedVisualNumber(); // -1 означает независимые визуалы; остальные значения обозначают закреплённый номер.
         lockButton.getStyle().imageUp = pinned < 0 ? Icon.lockOpen : Icon.lock; // Стиль принадлежит этой кнопке, поэтому остальные иконки игры не меняются.
         var number = "[#FFD37F]" + (pinned < 0 ? editedWheel : pinned) + "[]"; // Только номер окрашиваем жёлтым HEX, оставляя описание серым.
-        lockLabel.setText(pinned < 0 ? "Использовать визуал колеса № " + number + " везде" : "Визуал колеса № " + number + " используется везде"); // Подсказка отражает действие открытого замка либо источник общего вида.
+        lockLabel.setText(pinned < 0 ? Core.bundle.format("buildwheel.menu.shared-appearance.enable", number) : Core.bundle.format("buildwheel.menu.shared-appearance.active", number)); // Подсказка отражает действие открытого замка либо источник общего вида.
         lockLabel.setWrap(false); // Измеряем полный новый текст независимо от переноса в предыдущем состоянии замка.
         var container = lockLabel.parent, available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Учитываем фактическую ширину экрана и отступы штатной подсказки.
         var width = lockLabel.getPrefWidth(); // Размер описания пересчитывается только при обновлении замка.
@@ -237,11 +237,11 @@ exports.create = function(api) {
         lockLabel = lockButton.getListeners().peek().getContainer().getCells().first().get(); // Меняем текст существующей подсказки, не создавая слушатель при каждом переключении.
         refreshLock(); tools.row(); // Устанавливаем сохранённую иконку и начинаем следующий ряд.
         var actions = [ // Порядок кнопок соответствует четырём типам снимков и открытию браузера.
-            {icon: Icon.fileImage, type: "visual", text: "Сохранить визуал этого колеса"},
-            {icon: Icon.fileCode, type: "blocks", text: "Сохранить блоки этого колеса"},
-            {icon: Icon.fileArchive, type: "wheel", text: "Сохранить и визуал, и блоки этого колеса"},
-            {icon: Icon.layers, type: "wheels", text: "Сохранить данный набор колёс"},
-            {icon: Icon.bookOpen, type: "browser", text: "Сохранения"}
+            {icon: Icon.fileImage, type: "visual", text: Core.bundle.get("buildwheel.menu.save-visual")},
+            {icon: Icon.fileCode, type: "blocks", text: Core.bundle.get("buildwheel.menu.save-blocks")},
+            {icon: Icon.fileArchive, type: "wheel", text: Core.bundle.get("buildwheel.menu.save-wheel")},
+            {icon: Icon.layers, type: "wheels", text: Core.bundle.get("buildwheel.menu.save-set")},
+            {icon: Icon.bookOpen, type: "browser", text: Core.bundle.get("buildwheel.menu.saves")}
         ];
         for (var i = 0; i < actions.length; i++) { // Создаём только пять кнопок текущей панели.
             addWheelTool(tools, actions[i], i == 0 ? 10 : 2); // После замка оставляем зазор больше, чем между остальными кнопками.
@@ -286,10 +286,10 @@ exports.create = function(api) {
         if (editedSector >= sectorCount) editedSector = -1; // Уменьшение числа секторов снимает выделение скрытого слота, сохраняя сам блок.
         var selected = editedSector >= 0; // Есть ли 'зелёный' сектор, для которого разрешено менять настройки?
         var block = selected ? api.getBlock(editedWheel, editedSector) : null; //ставим нужный блок
-        var sectorName = sectorCount == 8 ? directionNames[editedSector] : sectorCount == 4 ? directionNames[editedSector * 2] : "Сектор " + (editedSector + 1); // У восьми секторов используем все направления, у четырёх — Север, Восток, Юг, Запад; у остальных — номер с единицы.
+        var sectorName = sectorCount == 8 ? directionNames[editedSector] : sectorCount == 4 ? directionNames[editedSector * 2] : Core.bundle.format("buildwheel.menu.sector-number", editedSector + 1); // У восьми секторов используем все направления, у четырёх — Север, Восток, Юг, Запад; у остальных — номер с единицы.
         sectorLabel.setText(selected
-            ? sectorName + ": " + (block == null ? "пустой слот" : String(block.localizedName))
-            : "Выберите сектор на колесе"); //описание над колесом?
+            ? Core.bundle.format("buildwheel.menu.sector-block", sectorName, block == null ? Core.bundle.get("buildwheel.menu.empty-slot") : String(block.localizedName))
+            : Core.bundle.get("buildwheel.menu.select-sector")); //описание над колесом?
         clearSelectionButton.visible = selected; // Показываем крестик при наличии 'зелёного' сектора.
         clearSlotButton.visible = selected; // Показываем кнопку 'Сброс блока' у выбранного 'зелёному' сектору.
         clearSlotButton.setDisabled(!selected || block == null); // Уже пустой слот повторно очищать незачем.
@@ -297,7 +297,7 @@ exports.create = function(api) {
         scaleLabel.visible = selected; // Подпись с процентом показываем вместе с ползунком.
         scaleSlider.setDisabled(!selected); // Разблокировка ползунка размера иконки при наличии 'зелёного' сектора.
         scaleSlider.setValue(selected ? Math.round(getIconScale(editedWheel, editedSector) * 100) : 100, false); // размер в %, таблица iconScales — в коэффициентах.
-        scaleLabel.setText("Размер иконки: " + Math.round(scaleSlider.getValue()) + "%"); //оглавление числа
+        scaleLabel.setText(Core.bundle.format("buildwheel.menu.icon-scale", Math.round(scaleSlider.getValue()))); //оглавление числа
         for (var i = 0; i < blockButtons.length; i++) {
             blockButtons[i].button.setDisabled(!selected);//блокировка/разблокировка кнопок листа блоков при наличии/отсутствии 'зелёного' сектора
             blockButtons[i].button.setChecked(selected && blockButtons[i].block == block); // setChecked - подсвечиваем выбранный блок
@@ -367,7 +367,7 @@ exports.create = function(api) {
             addBlockButton(block);
             count++;
         }
-        if (count == 0) grid.add("Блоки не найдены").pad(12);
+        if (count == 0) grid.add(Core.bundle.get("buildwheel.blocks.none-found")).pad(12);
         grid.invalidateHierarchy(); // Сообщаем таблицам, что размеры содержимого изменились и раскладку надо пересчитать.
         blockPane.setScrollY(0); // После смены запроса или категории возвращаем список к началу.
         refreshSectorControls();
@@ -427,7 +427,7 @@ exports.create = function(api) {
         var cell = table.button(categoryIcon, Styles.squareTogglei,
             () => chooseCategory(nextCategory)); //запоминаем какую категорию активируем кнопкой
         cell.size(size).name("buildwheel-category-" + categoryName); // Кнопки соприкасаются рамками, без внешних отступов.
-        addTooltip(cell.get(), allCategories ? "Всё" : Core.bundle.get("blocks." + categoryName, categoryName), true); // Категории сохраняют прежний вид подсказки с привязкой к началу иконки.
+        addTooltip(cell.get(), allCategories ? Core.bundle.get("buildwheel.blocks.all") : Core.bundle.get("blocks." + categoryName, categoryName), true); // Категории сохраняют прежний вид подсказки с привязкой к началу иконки.
         var button = cell.get();
         //button.resizeImage(Math.min(24, size - 3)); // либо 24 (великовато), либо 21 (в самый раз)
         button.resizeImage(21);
@@ -496,7 +496,7 @@ exports.create = function(api) {
             uiSounds.play(uiSounds.deleteBlock);//проигрываем звук удаления блока
         });
         uiSounds.muteDefaultClick(clearSelectionButton);
-        addTooltip(clearSelectionButton, "Снять выделение сектора"); // Показываем штатное серое описание под началом кнопки.
+        addTooltip(clearSelectionButton, Core.bundle.get("buildwheel.menu.deselect-sector")); // Показываем штатное серое описание под началом кнопки.
         group.addChild(clearSelectionButton);
 
         clearSlotButton = new ImageButton(createClearSlotIcon(), Styles.cleari);
@@ -505,7 +505,7 @@ exports.create = function(api) {
         clearSlotButton.setPosition(0, previewSize - crossSize); // Освободившийся верхний левый угол 'Сброс блока'.
         clearSlotButton.clicked(() => assignBlock(null)); // Очищаем и сохраняем слот; зелёное выделение и масштаб остаются.
         uiSounds.muteDefaultClick(clearSlotButton);
-        addTooltip(clearSlotButton, "Удалить блок из сектора"); // Показываем штатное серое описание под началом кнопки.
+        addTooltip(clearSlotButton, Core.bundle.get("buildwheel.menu.clear-slot")); // Показываем штатное серое описание под началом кнопки.
         group.addChild(clearSlotButton);
         return group;
     }
@@ -647,20 +647,20 @@ exports.create = function(api) {
 
     function resetKeyButton(table, binds, name) { // Кнопки сброса имеют тот же размер и одинаковое поведение во всех строках клавиш.
         var button = table.button(Icon.refresh, Styles.cleari, () => resetBindings(binds)).size(keySize).padTop(2).padBottom(2).padRight(4).name("buildwheel-key-reset-" + name).get(); // Только значок на прозрачном фоне; не изменяем назначения других групп.
-        addControlTooltip(button, "Сбросить по умолчанию"); // Назначение кнопки объясняется при наведении.
+        addControlTooltip(button, Core.bundle.get("buildwheel.actions.reset-defaults")); // Назначение кнопки объясняется при наведении.
     }
 
     function buildWheelKeys(layout) { // Номера 1–9,0 переносятся на следующую строку при нехватке места.
         var table = new Table(), line = new Table(), occupied = 0; // Каждый ряд независим: широкая первая кнопка не растягивает цифровые кнопки нижних рядов.
         table.left(); // Переносимые ряды начинаются от одного левого края.
         line.left(); // Под отдельным заголовком кнопки колёс начинаются от левого края строки.
-        keyButton(line, controls.bindings.wheelModifier, "Второстепенная", keyWide, "wheel-modifier", null); // Модификатор может быть отключён.
+        keyButton(line, controls.bindings.wheelModifier, Core.bundle.get("buildwheel.controls.secondary"), keyWide, "wheel-modifier", null); // Модификатор может быть отключён.
         line.add("+").width(keySize).padRight(4).get().setAlignment(Align.center); // Знак центрируется, а зазоры до рамок соседних кнопок становятся одинаковыми.
         occupied += keyWide + 4 + keySpace; // Учитываем кнопку, её отступы и знак плюс.
         for (var n = 1; n <= 10; n++) { // Используем привычный порядок стандартной клавиатуры.
             if (occupied + keySpace > layout.width) { table.add(line).width(layout.width).left().padBottom(5); table.row(); line = new Table(); line.left(); occupied = 0; } // Переносим кнопку целиком, сохраняя размер и резерв справа.
             var number = n % 10; // Последнее место соответствует колесу №0.
-            keyButton(line, controls.bindings.wheels[number], String(number), keySize, "wheel-" + number, "Колесо " + number); // Каждая подсказка обозначает неизменный номер колеса.
+            keyButton(line, controls.bindings.wheels[number], String(number), keySize, "wheel-" + number, Core.bundle.format("buildwheel.controls.wheel-binding", number)); // Каждая подсказка обозначает неизменный номер колеса.
             occupied += keySpace; // Подготавливаем место следующей кнопки.
         }
         if (occupied + resetSpace + keySpace > layout.width) { table.add(line).width(layout.width).left().padBottom(5); table.row(); line = new Table(); line.left(); } // Сброс тоже переносится, если остатка строки недостаточно.
@@ -674,9 +674,9 @@ exports.create = function(api) {
     function buildKeyCombination(table, layout, title, modifier, primary, reset, name) { // Одна строка для меню или палитры с одинаковыми кнопками клавиш.
         var required = (keyWide + 4) * 2 + keySpace + (reset ? resetSpace + keySpace : 0); // Размер комбинации известен заранее, включая все отступы.
         var row = controlRow(table, layout, title, required).table; // На узком экране подпись и комбинация занимают разные строки.
-        keyButton(row, modifier, "Второстепенная", keyWide, name + "-modifier", null); // Отключённая второстепенная клавиша не требуется для срабатывания основной.
+        keyButton(row, modifier, Core.bundle.get("buildwheel.controls.secondary"), keyWide, name + "-modifier", null); // Отключённая второстепенная клавиша не требуется для срабатывания основной.
         row.add("+").width(keySize).padRight(4).get().setAlignment(Align.center); // Свободное место до рамок соседних кнопок распределяется поровну.
-        keyButton(row, primary, "Основная", keyWide, name + "-key", null); // Без основной клавиши действие выключено.
+        keyButton(row, primary, Core.bundle.get("buildwheel.controls.primary"), keyWide, name + "-key", null); // Без основной клавиши действие выключено.
         if (reset) { row.add().width(resetSpace); resetKeyButton(row, [modifier, primary], name); } // Для меню восстанавливаем Ctrl + минус.
     }
 
@@ -689,7 +689,7 @@ exports.create = function(api) {
         }
         var table = new Table(); // Таблица располагается сразу под списком блоков.
         table.left(); // Сохраняем общий левый край списка и подписей настроек.
-        var titles = ["Сдвиг колеса при нехватке места: 100%", "Отключить \"категория/выбор блока №\"", "Ограничить курсор диаметром колеса", "Ограничить курсор внутренним кругом", "Выбор колеса", "Радиальное меню", "Палитра", "Открывать палитру в главном меню", "Клавиша + колёсико мыши", "Отображать номер колеса", "Относительный ввод мыши для колёс", "Градация звука открытия по номеру"]; // Учитываем все подписи и наибольшую длину процента сдвига.
+        var titles = [Core.bundle.format("buildwheel.controls.edge-shift", 100), Core.bundle.get("buildwheel.controls.disable-number-keys"), Core.bundle.get("buildwheel.controls.clip-outer"), Core.bundle.get("buildwheel.controls.clip-inner"), Core.bundle.get("buildwheel.controls.wheel-selection"), Core.bundle.get("buildwheel.menu.radial-title"), Core.bundle.get("buildwheel.menu.palette-title"), Core.bundle.get("buildwheel.controls.palette-in-menu"), Core.bundle.get("buildwheel.controls.scroll-key"), Core.bundle.get("buildwheel.controls.show-number"), Core.bundle.get("buildwheel.controls.relative-mouse"), Core.bundle.get("buildwheel.controls.wheel-open-pitch")]; // Учитываем все подписи и наибольшую длину процента сдвига.
         var longest = 0, measure = new Label(""); // Один временный Label измеряет фактическую ширину игрового шрифта.
         for (var i = 0; i < titles.length; i++) { measure.setText(titles[i]); longest = Math.max(longest, measure.getPrefWidth() / Scl.scl()); } // Переводим измеренные пиксели в UI-единицы, как при расчёте ширины всей панели.
         var layout = {width: width - 18}; // Постоянно оставляем справа 18 UI-пикселей под полосу прокрутки.
@@ -697,24 +697,24 @@ exports.create = function(api) {
         var combinationWidth = (keyWide + 4) * 2 + keySpace * 2 + resetSpace; // Две широкие кнопки, плюс, квадратный сброс и отступ перед ним.
         layout.start = Math.min(longest * 1.5, Math.max(120, layout.width - combinationWidth)); // Оптимальная колонка — полторы длины самой длинной подписи; при нехватке места сдвигаем влево.
         var shiftWidth = Math.min(302, layout.width - layout.start); // 302 — максимальная ширина слайдера прозрачности «Основного круга» при правой форме шириной 600.
-        var shiftRow = controlRow(table, layout, "Сдвиг колеса при нехватке места: " + Math.round(controls.edgeShift * 100) + "%", shiftWidth); // Начало слайдера совпадает с общей колонкой переключателей.
+        var shiftRow = controlRow(table, layout, Core.bundle.format("buildwheel.controls.edge-shift", Math.round(controls.edgeShift * 100)), shiftWidth); // Начало слайдера совпадает с общей колонкой переключателей.
         var shiftLabel = shiftRow.label; // Точное значение видно рядом с названием.
         var shift = new Slider(0, 100, 1, false); // 0 выключает сдвиг, 100 задаёт отступ в полный радиус.
         shift.name = "buildwheel-control-edgeShift"; shift.setValue(Math.round(controls.edgeShift * 100), false); // Показываем сохранённое значение без события изменения.
-        shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText("Сдвиг колеса при нехватке места: " + Math.round(value) + "%"); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
+        shift.moved(value => { controls.set("edgeShift", Number(value) / 100); shiftLabel.setText(Core.bundle.format("buildwheel.controls.edge-shift", Math.round(value))); settingsChanged = true; }); // Сохраняем долю и обновляем подпись только при перемещении ползунка.
         shiftRow.table.add(shift).width(shiftWidth).height(44); // Заполняем остаток строки до резерва прокрутки, не превышая предельную длину.
-        addControlTooltip(shift, "Доля на которую колесо строительства отодвигается при нехватке места на экране, перемещая и курсор. Работает с обычной мышью и с относительным вводом."); // Объясняем совместное смещение колеса и курсора при обоих способах ввода.
-        addControlToggle(table, layout, "Отключить \"категория/выбор блока №\"", "disableNumberKeys", "В Mindustry цифры 0-9 в настройках управления по умолчанию используются как быстрые клавиши выбора категорий и блоков, тем самым присваивая каждому блоку свой номер."); // По умолчанию цифровой выбор игры отключён.
-        addControlToggle(table, layout, "Ограничить курсор диаметром колеса", "clipOuter", "Останавливает движение курсора за границу диаметра открытого колеса строительства у это самой границы."); // Ограничиваем расстояние от центра внешним радиусом.
-        addControlToggle(table, layout, "Ограничить курсор внутренним кругом", "clipInner", "Останавливает движение курсора чуть за границей внутренного круга колеса строительства - для молниеносного выбора."); // При двух включённых границах действует меньшая окружность.
-        table.add("Выбор колеса").left().padTop(8); table.row(); // Заголовок отделяется от переносимых кнопок.
+        addControlTooltip(shift, Core.bundle.get("buildwheel.controls.edge-shift.description")); // Объясняем совместное смещение колеса и курсора при обоих способах ввода.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.disable-number-keys"), "disableNumberKeys", Core.bundle.get("buildwheel.controls.disable-number-keys.description")); // По умолчанию цифровой выбор игры отключён.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.clip-outer"), "clipOuter", Core.bundle.get("buildwheel.controls.clip-outer.description")); // Ограничиваем расстояние от центра внешним радиусом.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.clip-inner"), "clipInner", Core.bundle.get("buildwheel.controls.clip-inner.description")); // При двух включённых границах действует меньшая окружность.
+        table.add(Core.bundle.get("buildwheel.controls.wheel-selection")).left().padTop(8); table.row(); // Заголовок отделяется от переносимых кнопок.
         table.add(buildWheelKeys(layout)).width(layout.width).left().padBottom(5); table.row(); // Включаем кнопку 0 в общий порядок переноса и соблюдаем правый резерв.
-        buildKeyCombination(table, layout, "Радиальное меню", controls.bindings.menuModifier, controls.bindings.menuKey, true, "menu"); // Сброс этой строки не меняет клавиши колёс.
-        buildKeyCombination(table, layout, "Палитра", controls.bindings.paletteModifier, controls.bindings.paletteKey, false, "palette"); // По умолчанию обе кнопки не назначены.
-        addControlToggle(table, layout, "Открывать палитру в главном меню", "paletteInMenu", "Новый раздел в Базе данных. Комбинация быстрых клавиш для Палитры срабатывает и в главном меню."); // Управляем пунктом «Палитра» в «Базе данных» и её горячими клавишами в главном меню.
-        var scrollRow = controlRow(table, layout, "Клавиша + колёсико мыши", keyWide + 4).table; // Прокрутке нужна только одна удерживаемая клавиша.
-        keyButton(scrollRow, controls.bindings.scrollKey, "Основная", keyWide, "scroll-key", "Клавиша перехватывает 'Масштабирование' колёсиком, по умолчанию отключено."); // До назначения клавиши прокрутка остаётся обычной.
-        var numberRow = controlRow(table, layout, "Отображать номер колеса", 44 + 8 + 132 + 8 + keySize).table; // Номер, поле цвета и квадратный сброс располагаются в одной строке.
+        buildKeyCombination(table, layout, Core.bundle.get("buildwheel.menu.radial-title"), controls.bindings.menuModifier, controls.bindings.menuKey, true, "menu"); // Сброс этой строки не меняет клавиши колёс.
+        buildKeyCombination(table, layout, Core.bundle.get("buildwheel.menu.palette-title"), controls.bindings.paletteModifier, controls.bindings.paletteKey, false, "palette"); // По умолчанию обе кнопки не назначены.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.palette-in-menu"), "paletteInMenu", Core.bundle.get("buildwheel.controls.palette-in-menu.description")); // Управляем пунктом «Палитра» в «Базе данных» и её горячими клавишами в главном меню.
+        var scrollRow = controlRow(table, layout, Core.bundle.get("buildwheel.controls.scroll-key"), keyWide + 4).table; // Прокрутке нужна только одна удерживаемая клавиша.
+        keyButton(scrollRow, controls.bindings.scrollKey, Core.bundle.get("buildwheel.controls.primary"), keyWide, "scroll-key", Core.bundle.get("buildwheel.controls.scroll-key.description")); // До назначения клавиши прокрутка остаётся обычной.
+        var numberRow = controlRow(table, layout, Core.bundle.get("buildwheel.controls.show-number"), 44 + 8 + 132 + 8 + keySize).table; // Номер, поле цвета и квадратный сброс располагаются в одной строке.
         var showNumber = new CheckBox(""); showNumber.setChecked(controls.showNumber); showNumber.name = "buildwheel-control-showNumber"; // По умолчанию номер выключен.
         showNumber.left(); // Начало видимого значка совпадает с остальными переключателями и слайдером сдвига.
         showNumber.changed(() => { controls.set("showNumber", showNumber.isChecked()); settingsChanged = true; }); // Новый режим действует при следующем открытии или переключении колеса.
@@ -727,11 +727,11 @@ exports.create = function(api) {
         numberHex.changed(() => { if (validNumberHex(numberHex.getText())) { controls.set("numberColor", Color.valueOf(numberHex.getText())); settingsChanged = true; } }); // Допустимый RGB сразу меняет подчёркивание и цвет номера.
         numberRow.add(numberHex).width(132).height(44).padLeft(8); // Размер HEX совпадает с полем «Основного круга» в широкой правой форме.
         var resetNumberColor = numberRow.button(Icon.refresh, Styles.cleari, () => { controls.set("numberColor", Color.white); numberHex.setText("#FFFFFF"); settingsChanged = true; }).size(keySize).padLeft(8).name("buildwheel-reset-number-color").get(); // Сбрасываем только цвет; состояние переключателя и остальные параметры сохраняются.
-        addControlTooltip(resetNumberColor, "Сбросить по умолчанию");
-        var relativeRow = controlRow(table, layout, "Относительный ввод мыши для колёс", 88).table; // Новый раздел завершает левый список настроек.
-        controlToggle(relativeRow, "relativeMouse", "Relative Mouse Mode - Δx и Δy вместо абсолютного ввода."); // Основной режим не зависит от включения двух круговых ограничителей.
-        controlToggle(relativeRow, "customArrow", "Кастомная стрелка курсора - чтоб не путали когда нестандартный ввод."); // Выбор изображения действует и при relative mode, включённом ограничителями.
-        addControlToggle(table, layout, "Градация звука открытия по номеру", "wheelOpenPitch", "Приглушение звука открытия в соответствии с номером колеса."); // По умолчанию включено; у каждого номера своя высота тона звука открытия.
+        addControlTooltip(resetNumberColor, Core.bundle.get("buildwheel.actions.reset-defaults"));
+        var relativeRow = controlRow(table, layout, Core.bundle.get("buildwheel.controls.relative-mouse"), 88).table; // Новый раздел завершает левый список настроек.
+        controlToggle(relativeRow, "relativeMouse", Core.bundle.get("buildwheel.controls.relative-mouse.description")); // Основной режим не зависит от включения двух круговых ограничителей.
+        controlToggle(relativeRow, "customArrow", Core.bundle.get("buildwheel.controls.custom-arrow.description")); // Выбор изображения действует и при relative mode, включённом ограничителями.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.wheel-open-pitch"), "wheelOpenPitch", Core.bundle.get("buildwheel.controls.wheel-open-pitch.description")); // По умолчанию включено; у каждого номера своя высота тона звука открытия.
         return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
     }
 
@@ -766,7 +766,7 @@ exports.create = function(api) {
             searchText = String(text); // Callback поля передаёт новый текст; ту же сходу сохраняем его как строку JS.
             rebuildGrid();
         }).height(44).growX().name("buildwheel-search").get(); // фиксированная высота поиска 44, автоматическая ширина на всю ширину лева; системное имя "buildwheel-search"; get возвращает созданный TextField.
-        searchField.setMessageText("Поиск блока..."); // Подсказка пустого поля.
+        searchField.setMessageText(Core.bundle.get("buildwheel.blocks.search")); // Подсказка пустого поля.
         left.add(searchRow).growX();
         left.row(); //заканчиваем со строкой, перенося последующие элементы UI на новый ряд
         
@@ -829,7 +829,7 @@ exports.create = function(api) {
         right.top();
 
         // ПРАВАЯ ЧАСТЬ: ПОЛЗУНОК ВЫБОРА ВКЛАДКИ КОЛЕСА ВЫБОРА У МАНЕКЕНА
-        wheelLabel = right.add("Колесо " + editedWheel).growX().get(); //Показ номера активного макета колеса на всю ширину, через Label для изменений
+        wheelLabel = right.add(Core.bundle.format("buildwheel.menu.wheel-number", editedWheel)).growX().get(); //Показ номера активного макета колеса на всю ширину, через Label для изменений
         right.row();
         wheelSlider = new Slider(1, wheelCount, 1, false); // Позиции 1–10 отображают колёса 1–9, 0; false — горизонтальная ориентация.
         wheelSlider.name = "buildwheel-wheel-number";
@@ -837,7 +837,7 @@ exports.create = function(api) {
         wheelSlider.moved(value => {//Callback на постоянное выполнение при сдвиге ползунка
             editedWheel = Math.round(value) % wheelCount; // Позиции 1–9 сохраняют номер; позиция 10 превращается в номер 0.
             editedSector = -1; // При смене колеса прежний сектор автоматически не выбираем.
-            wheelLabel.setText("Колесо " + editedWheel);
+            wheelLabel.setText(Core.bundle.format("buildwheel.menu.wheel-number", editedWheel));
             appearanceEditor.selectWheel(editedWheel); // Переключаем значения полей, подчёркивания и слайдеры на независимый визуал этого номера.
             resizePreview(); // Подгоняем тот же виджет «манекена» и угловые кнопки под диаметр другого комплекта.
             refreshLock(); // Открытый замок предлагает закрепить новый выбранный номер; закрытый продолжает показывать прежний источник.
@@ -845,7 +845,7 @@ exports.create = function(api) {
         });
         var wheelNumberRow = new Table(); // Объединяем слайдер номера колеса и кнопку палитры в одну строку.
         wheelNumberRow.add(wheelSlider).growX().height(32); // Слайдер занимает всю ширину строки до кнопки справа.
-        wheelNumberRow.button("Палитра", paletteIcon, 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
+        wheelNumberRow.button(Core.bundle.get("buildwheel.menu.palette-title"), paletteIcon, 24, () => palette.show()) // Берём иконку из sprites мода и открываем окно палитры.
             .width(144).height(44).name("buildwheel-open-palette"); // Закрепляем кнопку у правого края без всплывающей подсказки.
         right.add(wheelNumberRow).width(rightWidth).padTop(8).padBottom(8); // Фиксируем правый край строки, сохраняя место сверху под высокий стандартный бегунок.
         right.row();
@@ -866,7 +866,7 @@ exports.create = function(api) {
         scaleSlider.moved(value => {
             if (editedSector < 0) return;
             iconScales[editedWheel][editedSector] = value / 100; // Переводим проценты в коэффициент: например, 175 превращается в 1.75.
-            scaleLabel.setText("Размер иконки: " + Math.round(value) + "%");
+            scaleLabel.setText(Core.bundle.format("buildwheel.menu.icon-scale", Math.round(value)));
             saveSlot(); // Обновляем данные Core.settings в памяти; файл здесь ещё не записывается.
         });
         scaleSliderCell = editor.add(scaleSlider).width(28).height(previewUiSize).padRight(8); // Добавляем боковой слайдер высотой с «манекен» и сохраняем его ячейку.
@@ -959,7 +959,7 @@ exports.create = function(api) {
             var layer = new Table(); layer.bottom().left(); // Stack растягивает прозрачный слой вместе с окном при изменении разрешения.
             var button = layer.button(wheelIcon, Styles.defaulti, openFromPause).size(70).padBottom(bottom / Scl.scl()).name("buildwheel-pause-settings").get(); // Рамка и размер соответствуют штатной кнопке; нажатие открывает настройки мода.
             button.getImageCell().size(32); // Размер изображения не зависит от разрешения PNG.
-            addTooltip(button, "Радиальное меню"); // Общий стиль подсказок закрепляет текст под началом кнопки.
+            addTooltip(button, Core.bundle.get("buildwheel.menu.radial-title")); // Общий стиль подсказок закрепляет текст под началом кнопки.
             stack.add(layer); // Не меняем содержимое, которое PausedDialog пересоздаёт при каждом показе.
             pauseButtonInstalled = true; // Раскладка сохраняется в слое, повторные открытия ничего не сканируют.
         });
@@ -975,8 +975,8 @@ exports.create = function(api) {
         if (entries == null) return;
         if (databaseWheelButton == null) { // Кнопки выполняют те же действия, что и существующие способы открытия.
             var MenuButton = Packages.mindustry.ui.fragments.MenuFragment.MenuButton;
-            databaseWheelButton = new MenuButton("Радиальное меню", wheelIcon, () => show(editedWheel));
-            databasePaletteButton = new MenuButton("Палитра", paletteIcon, () => { api.closeWheel(); palette.show(); });
+            databaseWheelButton = new MenuButton(Core.bundle.get("buildwheel.menu.radial-title"), wheelIcon, () => show(editedWheel));
+            databasePaletteButton = new MenuButton(Core.bundle.get("buildwheel.menu.palette-title"), paletteIcon, () => { api.closeWheel(); palette.show(); });
         }
         entries.remove(databaseWheelButton, true); entries.remove(databasePaletteButton, true); // Повторное обновление не оставляет дубликаты собственных пунктов.
         var position = 0;
@@ -987,7 +987,7 @@ exports.create = function(api) {
     refreshDatabaseButtons(); // Первое построение учитывает сохранённое разрешение на открытие палитры.
 
     // Кнопка выхода
-    dialog.buttons.button("Назад", Icon.left, () => hide()).size(200, 54).name("buildwheel-back");
+    dialog.buttons.button(Core.bundle.get("buildwheel.actions.back"), Icon.left, () => hide()).size(200, 54).name("buildwheel-back");
     // При начале закрытия снимаем выделение и сохраняем изменённые настройки.
     // Сама анимация исчезновения диалога при этом ещё может продолжаться.
     dialog.hidden(() => {

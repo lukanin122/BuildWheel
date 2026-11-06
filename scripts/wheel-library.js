@@ -4,10 +4,10 @@
 exports.create = function() { // Загружаем библиотеку один раз при создании меню.
     var settingsKey = "buildwheel.library"; // Храним библиотеку отдельной строкой, не затрагивая настройки действующих колёс.
     var types = [ // Эти четыре типа соответствуют постоянным вкладкам браузера сохранений.
-        {id: "visual", title: "Визуал"},
-        {id: "blocks", title: "Блоки"},
-        {id: "wheel", title: "Блоки+Визуал"},
-        {id: "wheels", title: "Наборы колёс"}
+        {id: "visual", title: Core.bundle.get("buildwheel.browser.tab.visual")},
+        {id: "blocks", title: Core.bundle.get("buildwheel.browser.tab.blocks")},
+        {id: "wheel", title: Core.bundle.get("buildwheel.browser.tab.wheel")},
+        {id: "wheels", title: Core.bundle.get("buildwheel.browser.tab.wheels")}
     ];
     var entries = []; // В памяти находятся только обычные данные, без виджетов, текстур и обработчиков кадров.
     var nextId = 1; // Счётчик обеспечивает постоянный номер сохранения независимо от его имени и положения в списке.
@@ -19,7 +19,7 @@ exports.create = function() { // Загружаем библиотеку оди�
     }
 
     function copyData(data) { // Отделяем сохранённый снимок от изменяемых параметров колеса.
-        if (data == null || typeof data !== "object") throw new Error("Данные сохранения должны быть объектом."); // Не сохраняем отсутствующий комплект параметров.
+        if (data == null || typeof data !== "object") throw new Error(Core.bundle.get("buildwheel.error.save-object")); // Не сохраняем отсутствующий комплект параметров.
         return JSON.parse(JSON.stringify(data)); // Копируем вложенные массивы и объекты вместе с их значениями.
     }
 
@@ -68,7 +68,7 @@ exports.create = function() { // Загружаем библиотеку оди�
     // ДОБАВЛЕНИЕ И ИЗМЕНЕНИЕ СОХРАНЕНИЙ
     function add(type, name, data) { // Создаём самостоятельный снимок выбранных параметров.
         name = cleanName(name); // Убираем лишние пробелы перед проверкой имени.
-        if (!validType(type) || name.length === 0) throw new Error("Нужны известный тип и непустое имя сохранения."); // Не записываем неполную карточку.
+        if (!validType(type) || name.length === 0) throw new Error(Core.bundle.get("buildwheel.error.save-type-name")); // Не записываем неполную карточку.
         var snapshot = copyData(data); // Копирование выполняем до изменения списка, чтобы ошибка не оставила пустую запись.
         var id; // Подбираем свободный постоянный идентификатор.
         do { id = "wheel-" + nextId++; } while (findIndex(id) >= 0); // Счётчик и проверка защищают от повторения номера после повреждения настроек.

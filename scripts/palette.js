@@ -33,7 +33,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     var radius = readInteger("size", 28, 8, 80); // Размер — расстояние от центра гексагона до вершины в пикселях сцены.
     var gap = readInteger("gap", 2, 0, 30); // Отступ — расстояние между параллельными гранями соседних гексагонов.
     var showLabels = Core.settings.getBool(prefix + "labels", true); // По умолчанию показываем шесть цифр HEX внутри каждого цветного гексагона.
-    var dialog = extend(BaseDialog, "Палитра цветов", { // Создаём обычное окно и дополняем действие после его полного закрытия.
+    var dialog = extend(BaseDialog, Core.bundle.get("buildwheel.palette.title"), { // Создаём обычное окно и дополняем действие после его полного закрытия.
         remove: function() { // Сцена удаляет окно после завершения анимации закрытия.
             hideCopiedToast(); // Убираем плашку копирования вместе с палитрой.
             hideCustomClear(); // Закрываем также кнопку очистки отдельного образца.
@@ -64,9 +64,9 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
     var hsvKnobColor = Color.black; // На исходном белом цвете тонкие бегунки должны быть тёмными и заметными.
     var hsvInput = null, hsvOutputLabel = null; // Ссылки на поле ввода и надпись результата появляются при построении окна.
     var hsvAxes = [ // Общее описание трёх строк: пределы, шаг, подпись и подсказка.
-        {key: "h", label: "H", title: "Цветовой тон", max: 360, step: 0.01}, // Тон задаётся в градусах; 0 и 360 соответствуют красному.
-        {key: "s", label: "S", title: "Насыщенность", max: 1, step: 0.0001}, // Доля насыщенности: ноль нужен для точного сохранения серых цветов.
-        {key: "v", label: "V", title: "Яркость", max: 1, step: 0.0001} // Доля яркости: ноль нужен для чёрного и его корректного сброса.
+        {key: "h", label: "H", title: Core.bundle.get("buildwheel.palette.hsv.hue"), max: 360, step: 0.01}, // Тон задаётся в градусах; 0 и 360 соответствуют красному.
+        {key: "s", label: "S", title: Core.bundle.get("buildwheel.palette.hsv.saturation"), max: 1, step: 0.0001}, // Доля насыщенности: ноль нужен для точного сохранения серых цветов.
+        {key: "v", label: "V", title: Core.bundle.get("buildwheel.palette.hsv.value"), max: 1, step: 0.0001} // Доля яркости: ноль нужен для чёрного и его корректного сброса.
     ];
     for (var axisIndex = 0; axisIndex < hsvAxes.length; axisIndex++) { // Один раз подготавливаем цвета и числовые кэши градиентов.
         var axis = hsvAxes[axisIndex]; // Получаем описание текущего параметра HSV.
@@ -236,7 +236,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             copyToast.touchable = Touchable.disabled; // Мышь и щелчки проходят сквозь плашку к гексагонам под ней.
             copyToast.background(Tex.whiteui.tint(Color.valueOf("242424E6"))); // Задаём небольшой тёмный полупрозрачный фон без рамки.
             copyToast.margin(6, 9, 6, 9); // Оставляем немного места между текстом и краями плашки.
-            copyToast.add("Скопировано").get().setFontScale(0.8); // Делаем надпись меньше обычного текста интерфейса.
+            copyToast.add(Core.bundle.get("buildwheel.palette.copied")).get().setFontScale(0.8); // Делаем надпись меньше обычного текста интерфейса.
         }
         copyToast.color.a = 1; // Каждое новое копирование начинает показ с полной видимости.
         copyToast.pack(); // Подгоняем размер плашки под её надпись и внутренние отступы.
@@ -253,7 +253,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
 
     // ПОДСКАЗКА И ПОВТОРНОЕ КОПИРОВАНИЕ ВЫБРАННОГО HEX
     function refreshCopiedControl() { // Меняем содержимое уже созданной строки, сохраняя её размеры и положение текста.
-        copiedLabel.setText(lastCopied == null ? "Выберите #HEX" : "#" + lastCopied.hex); // До выбора показываем инструкцию, после выбора — полный код цвета.
+        copiedLabel.setText(lastCopied == null ? Core.bundle.get("buildwheel.palette.select-hex") : "#" + lastCopied.hex); // До выбора показываем инструкцию, после выбора — полный код цвета.
         copiedLabel.setColor(lastCopied == null ? Color.white : lastCopied.color); // Код сохраняет цвет выбранного гексагона; инструкция остаётся белой.
         copiedButton.touchable = lastCopied == null ? Touchable.disabled : Touchable.enabled; // Разрешаем нажимать строку только после выбора цвета.
     }
@@ -426,7 +426,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             axis.slider.setValue(hsvValues[index], false); // Переставляем нужный бегунок, не затрагивая остальные.
             refreshHsvOutput(index); // Обновляем результат, образец и зависимые переходы.
         }).size(32, 44).name("buildwheel-hsv-reset-" + axis.key); // Кнопки refresh одинаковы по размеру.
-        addTooltip(reset, "Сбросить " + axis.label).get().resizeImage(20); // Описание сброса использует серый текст и штатный полупрозрачный фон.
+        addTooltip(reset, Core.bundle.format("buildwheel.palette.hsv.reset", axis.label)).get().resizeImage(20); // Описание сброса использует серый текст и штатный полупрозрачный фон.
         return row; // Возвращаем готовую строку редактору HSV.
     }
 
@@ -446,7 +446,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
 
     function createHsvEditor(width) { // Собираем HEX и образцы в две колонки, а три слайдера располагаем ниже.
         var editor = new Table(), columnWidth = (width - 24) / 2, widthCells = []; // Запоминаем ячейки одинаковой ширины, чтобы позже сдвигать их края при появлении прокрутки.
-        editor.add("Изменение цвета").colspan(2).left().padBottom(12); // Отделяем заголовок от полей немного большим промежутком.
+        editor.add(Core.bundle.get("buildwheel.palette.hsv.title")).colspan(2).left().padBottom(12); // Отделяем заголовок от полей немного большим промежутком.
         editor.row(); // Верхняя строка содержит исходный HEX и кнопку результата.
         hsvInput = new TextField(hsvInputText); // Восстанавливаем текст, включая незавершённый ввод после изменения окна.
         hsvInput.name = "buildwheel-hsv-input"; // Постоянное имя поля исходного цвета.
@@ -500,19 +500,19 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
 
     function createTintEditor(width) { // Располагаем базовый цвет, результат и целевой цвет в одном ряду, а слайдер — ниже.
         var editor = new Table(), columnWidth = (width - 32) / 3, widthCells = []; // Сохраняем ячейки трёх колонок для подгонки под реальную ширину прокрутки.
-        widthCells.push(editor.add("Тонирование").width(columnWidth).left().padRight(8).padBottom(12)); // Заголовок занимает первую колонку над базовым цветом.
+        widthCells.push(editor.add(Core.bundle.get("buildwheel.palette.tint.title")).width(columnWidth).left().padRight(8).padBottom(12)); // Заголовок занимает первую колонку над базовым цветом.
         var percentCell = editor.add((Math.round(tintPercent * 10) / 10) + "%").width(columnWidth).padRight(8).padBottom(12).name("buildwheel-tint-percent"); // Процент занимает такую же ячейку, как центральная кнопка.
         widthCells.push(percentCell); tintPercentLabel = percentCell.get(); // Сохраняем надпись и её изменяемую по ширине ячейку.
         tintPercentLabel.setAlignment(Align.left); // Сохраняем положение начала текста при изменении числа процентов.
         widthCells.push(editor.add().width(columnWidth)); // Пустая третья ячейка тоже сохраняет общую ширину колонок.
         editor.row(); // Верхняя строка содержит три HEX-кода.
-        widthCells.push(addTooltip(editor.add(createTintField(0)).width(columnWidth).height(44).padRight(8), "Базовый цвет")); // Под исходным полем показываем серое описание его назначения.
+        widthCells.push(addTooltip(editor.add(createTintField(0)).width(columnWidth).height(44).padRight(8), Core.bundle.get("buildwheel.palette.tint.base"))); // Под исходным полем показываем серое описание его назначения.
         var output = createHexButton("buildwheel-tint-output-button", "buildwheel-tint-output", () => true, // Центральная кнопка использует ту же рамку и отступы, что результат HSV.
             (source, x, y) => copyHex(tintOutput.hex, source, x, y)); // Копируем результат с прежней плашкой, не меняя выбранный гексагон и редактор HSV.
         tintOutputLabel = output.label; // Сохраняем ссылку на надпись результата для обновления при перетаскивании.
         tintOutputLabel.setText("#" + tintOutput.hex); tintOutputLabel.setColor(tintOutput.color); // Восстанавливаем результат при перестройке окна.
         widthCells.push(editor.add(output.button).width(columnWidth).height(44).padRight(8)); // Центральная кнопка результата меняет ширину вместе с полями.
-        widthCells.push(addTooltip(editor.add(createTintField(1)).width(columnWidth).height(44), "Целевой цвет")); // Под целевым полем показываем серое описание его назначения.
+        widthCells.push(addTooltip(editor.add(createTintField(1)).width(columnWidth).height(44), Core.bundle.get("buildwheel.palette.tint.target"))); // Под целевым полем показываем серое описание его назначения.
         editor.row(); // Следом располагаем три одинаковых прямоугольника под соответствующими HEX.
         widthCells.push(editor.add(createColorSwatch(tintInputs[0].color, "buildwheel-tint-base-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Левый образец сохраняет ширину своего поля.
         widthCells.push(editor.add(createColorSwatch(tintOutput.color, "buildwheel-tint-output-swatch")).width(columnWidth).height(16).padTop(4).padRight(8)); // Центральный образец сохраняет ширину кнопки результата.
@@ -640,7 +640,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             onChanged(); // Отмечаем изменение настройки для записи на диск.
             rebuild(); // Перестраиваем сетку, не изменяя ни одного сохранённого HEX.
         }
-        editor.add("Кастомная палитра").growX().left(); // Название занимает начало строки, а кнопки уходят в её правый конец.
+        editor.add(Core.bundle.get("buildwheel.palette.custom.title")).growX().left(); // Название занимает начало строки, а кнопки уходят в её правый конец.
         add = editor.button(createRowIcon(true), Styles.cleari, () => changeRows(1)).size(32).name("buildwheel-custom-add-row").get(); // Плюс добавляет один видимый ряд.
         subtract = editor.button(createRowIcon(false), Styles.cleari, () => changeRows(-1)).size(32).name("buildwheel-custom-remove-row").get(); // Минус скрывает один ряд, сохраняя его цвета.
         add.resizeImage(20); subtract.resizeImage(20); // Иконки + и − имеют одинаковые размеры.
@@ -672,7 +672,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
             onChanged(); // Просим основное меню сохранить настройки на диск при закрытии.
             rebuildGeometry(); // Один раз обновляем координаты и готовые подписи.
         });
-        addTooltip(table.add(field).growX().height(44).padBottom(16), min + "–" + max + " пикселей"); // Диапазон показываем серым текстом под началом числового поля.
+        addTooltip(table.add(field).growX().height(44).padBottom(16), Core.bundle.format("buildwheel.palette.pixels-range", min, max)); // Диапазон показываем серым текстом под началом числового поля.
         table.row(); // Следующая настройка начинается с нового ряда.
     }
 
@@ -713,11 +713,11 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         controls.add(dialog.title).growX().padBottom(16).name("buildwheel-palette-title"); // Располагаем название только над настройками; над рисунком общей шапки нет.
         controls.row(); // Поля начинаются ниже заголовка правой колонки.
         settings.top().left(); // Настройки начинаются у верхнего края своей прокручиваемой области.
-        addNumberField(settings, "Размер гексагона", "size", 8, 80, radius); // Добавляем поле радиуса, как в исходной HTML-палитре.
-        addNumberField(settings, "Отступ", "gap", 0, 30, gap); // Добавляем единый отступ между соседними гранями.
+        addNumberField(settings, Core.bundle.get("buildwheel.palette.hex-size"), "size", 8, 80, radius); // Добавляем поле радиуса, как в исходной HTML-палитре.
+        addNumberField(settings, Core.bundle.get("buildwheel.palette.gap"), "gap", 0, 30, gap); // Добавляем единый отступ между соседними гранями.
         var selectionRow = new Table(); // Объединяем выбранный HEX и переключатель подписей в один ряд.
         selectionRow.add(createCopiedButton()).growX().height(44).padRight(12); // Слева показываем инструкцию или кнопку копирования, сохраняя место под рамку.
-        selectionRow.check("Показывать HEX", showLabels, value => { // Справа создаём переключатель подписей с сохранённым состоянием.
+        selectionRow.check(Core.bundle.get("buildwheel.palette.show-hex"), showLabels, value => { // Справа создаём переключатель подписей с сохранённым состоянием.
             showLabels = value; // Меняем только разрешение рисовать готовый кэш подписей.
             Core.settings.put(prefix + "labels", value); // Сохраняем состояние переключателя в памяти настроек игры.
             onChanged(); // Сообщаем основному меню, что настройки потребуется записать.
@@ -761,7 +761,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         settingsPane.hovered(() => Core.scene.setScrollFocus(settingsPane)); // Над правой панелью колёсико мыши прокручивает настройки.
         controls.add(settingsPane).grow().minWidth(0).minHeight(0); // Панель настроек занимает всё место между заголовком и кнопкой возврата.
         controls.row(); // Последняя строка правой колонки всегда остаётся видимой.
-        controls.button("Назад", Icon.left, () => hide()).growX().height(54).padTop(8).name("buildwheel-palette-back"); // Закрываем палитру, не заставляя прокручивать настройки до кнопки «Назад».
+        controls.button(Core.bundle.get("buildwheel.palette.back"), Icon.left, () => hide()).growX().height(54).padTop(8).name("buildwheel-palette-back"); // Закрываем палитру, не заставляя прокручивать настройки до кнопки «Назад».
         imagePane = new ScrollPane(createImage(), Styles.defaultPane); // Разрешаем рассматривать всю палитру, даже если её размер больше экрана.
         imagePane.name = "buildwheel-palette-scroll"; // Отдельное имя помогает проверить границы видимой области рисунка.
         imagePane.setFadeScrollBars(false); // Оставляем нужные полосы прокрутки видимыми.

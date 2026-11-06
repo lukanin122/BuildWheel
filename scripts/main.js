@@ -67,7 +67,7 @@ Events.on(ClientLoadEvent, () => {
     function prepareStandardCursor() { // Используем тот же PNG и центральную точку привязки, что Fonts.loadSystemCursors.
         if (standardCursorTexture != null) return true;
         try { standardCursorTexture = new Texture(Core.files.internal("cursors/cursor.png")); standardCursorRegion = new TextureRegion(standardCursorTexture); standardCursorScale = Fonts.cursorScale(); return true; }
-        catch (error) { if (standardCursorTexture != null) standardCursorTexture.dispose(); standardCursorTexture = null; Log.warn("BuildWheel: стандартная стрелка недоступна: @", String(error)); return false; } // Не оставляем невидимый режим при ошибке загрузки изображения.
+        catch (error) { if (standardCursorTexture != null) standardCursorTexture.dispose(); standardCursorTexture = null; Log.warn(Core.bundle.get("buildwheel.log.cursor-image"), String(error)); return false; } // Не оставляем невидимый режим при ошибке загрузки изображения.
     }
 
     function wheelFrame() { // Лёгкая проверка работает только у открытого колеса; нативный ввод читается только в relative mode.
@@ -285,7 +285,7 @@ Events.on(ClientLoadEvent, () => {
     function closeWheel() {
         wheelOpen = false; // Закрытие сначала отключает обработку движения, даже если до этого был показан номер.
         wheel.update(null); virtualActive = false; // Сначала прекращаем чтение накопителя и отображение виртуального указателя.
-        try { relative.end(); } catch (error) { Log.err("BuildWheel: ошибка освобождения SDL: @", String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
+        try { relative.end(); } catch (error) { Log.err(Core.bundle.get("buildwheel.log.sdl-release"), String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
         setMotionEnabled(false); // Убираем обработчик наведения из цепочки ввода.
         hideWheelNumber(); // Номер и временно скрытый курсор не должны оставаться после выбора, отмены или открытия окна.
         wheel.resetHoverSound(); // Повторное открытие начинает новую историю звука наведения.
@@ -306,7 +306,7 @@ Events.on(ClientLoadEvent, () => {
             Core.scene.getViewport().project(cursorPoint.set(mousePosition)); // Получаем экранные координаты Arc с осью Y снизу вверх.
             var x = Math.round(cursorPoint.x), y = Math.round(cursorPoint.y), moved = x == Core.input.mouseX() && y == Core.input.mouseY(); // Целая позиция совпадает с точностью системной мыши.
             try { if (!moved) { if (absoluteCursor == null) absoluteCursor = relativeModule.createWarp(relative); moved = absoluteCursor.move(x, y); } }
-            catch (error) { Log.warn("BuildWheel: сдвиг обычной мыши недоступен: @", String(error)); } // Ошибка не оставляет колесо отдельно от фактического курсора.
+            catch (error) { Log.warn(Core.bundle.get("buildwheel.log.absolute-shift"), String(error)); } // Ошибка не оставляет колесо отдельно от фактического курсора.
             if (moved) Core.scene.screenToStageCoordinates(mousePosition.set(Core.input.mouseX(), Core.input.mouseY())); // Фактическая целая позиция курсора становится центром, включая крайний пиксель окна.
             else mousePosition.set(originalX, originalY); // При отказе платформы сохраняем обычное открытие непосредственно под мышью.
         }
