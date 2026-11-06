@@ -329,7 +329,7 @@ exports.create = function(onChanged, onClosed) { // Меню создаёт од
         var textCell = container.getCells().first(), label = textCell.get(); // Работаем только с описанием настройки; плашка «Скопировано» не затрагивается.
         var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Ограничиваем ширину размером экрана.
         if (label.getPrefWidth() > available) { // Длинному описанию выделяем ширину в пределах экрана.
-            textCell.width(available); label.setWrap(true); // Включаем перенос у самой надписи, не уменьшая шрифт.
+            textCell.width(available / Scl.scl(1)); label.setWrap(true); // Cell сам применяет масштаб UI; переводим ширину сцены обратно в его единицы и включаем перенос текста.
         }
         container.update(() => container.keepInStage()); // У края экрана подсказка сдвигается внутрь, сохраняя обычную привязку в остальных случаях.
         return cell; // Позволяем продолжить цепочку настройки размеров или получения элемента.

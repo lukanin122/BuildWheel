@@ -169,8 +169,12 @@ exports.create = function() {
             var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "Linux SDL2 " + version[0] + "." + version[1] + "." + version[2], image: owner.path, allowed: () => true}; // Публичный Linux API не раскрывает внутренний флаг warp fallback.
             try { // Разовый перенос обычного указателя не является условием доступности относительного ввода.
                 var warp = find.invoke(symbols, ["SDL_WarpMouseInWindow"]).orElseThrow();
-                exports.linuxImage(maps, {warp: addr(warp), currentWindow: addresses.currentWindow}, 2); // Принадлежность окна уже проверена; дополнительный экспорт должен находиться в том же образе SDL.
-                found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // Публичная SDL-функция принимает окно и координаты от верхнего левого угла.
+                var driver = find.invoke(symbols, ["SDL_GetCurrentVideoDriver"]).orElseThrow();
+                exports.linuxImage(maps, {warp: addr(warp), driver: addr(driver), currentWindow: addresses.currentWindow}, 3); // Принадлежность окна уже проверена; оба дополнительных экспорта должны находиться в том же образе SDL.
+                var driverName = bind(driver, address, []).invokeWithArguments(none); // Getter без аргументов не получает неподтверждённых указателей.
+                var getDriverString = seg.getMethod("getString", [java.lang.Long.TYPE]);
+                var driverText = addr(driverName) == 0 ? "" : String(getDriverString.invoke(reinterpret.invoke(driverName, [new java.lang.Long("64")]), [zero])); // Имя принадлежит проверенной SDL; чтение ограничено длиной имени backend.
+                if (driverText == "x11") found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // Только подтверждённый X11 поддерживает обычный warp; Wayland и неизвестный backend не смещают колесо и кэш Arc.
             } catch (unsupportedWarp) {} // Отсутствующий экспорт отключает только сдвиг обычного указателя.
             maps = null; addresses = null; pointers = null; names = null; return found; // Текст карты памяти не остаётся в рабочих замыканиях.
         }
@@ -348,14 +352,14 @@ exports.createWarp = function(relative) { // Не удерживает курс�
     return {
         move: function(screenX, screenY) {
             if (disposed || failed || Vars.mobile || String(Core.input.getClass().getName()) != "arc.backend.sdl.SdlInput" || !java.lang.Thread.currentThread().equals(Core.app.getMainThread())) return false;
-            if (!isFinite(screenX) || !isFinite(screenY) || Core.graphics.getWidth() <= 0 || Core.graphics.getHeight() <= 0 || relative.active) return false;
+            if (!isFinite(screenX) || !isFinite(screenY) || Core.graphics.getWidth() <= 0 || Core.graphics.getHeight() <= 0 || (relative != null && relative.active)) return false;
             try {
                 var SDL = Packages.arc.backend.sdl.jni.SDL, flags = SDL.SDL_GetWindowFlags(Core.app.getWindow());
-                if ((flags & SDL.SDL_WINDOW_INPUT_FOCUS) == 0 || (flags & SDL.SDL_WINDOW_MINIMIZED) != 0 || (relative.absoluteMode != null && !relative.absoluteMode())) return false;
+                if ((flags & SDL.SDL_WINDOW_INPUT_FOCUS) == 0 || (flags & SDL.SDL_WINDOW_MINIMIZED) != 0 || (relative != null && relative.absoluteMode != null && !relative.absoluteMode())) return false;
                 if (fields == null) { fields = [Core.input.getClass().getDeclaredField("mouseX"), Core.input.getClass().getDeclaredField("mouseY")]; fields[0].setAccessible(true); fields[1].setAccessible(true); } // Проверяем доступ к кэшу Arc до физического переноса.
                 var x = Math.max(0, Math.min(Core.graphics.getWidth() - 1, Math.round(screenX))), y = Math.max(0, Math.min(Core.graphics.getHeight() - 1, Math.round(screenY)));
                 if (OS.isWindows) { if (nativeMove == null) prepareWindows(); if (!nativeMove(x, y)) return false; }
-                else if (relative.warpAbsolute == null || !relative.warpAbsolute(x, y)) return false; // Linux/macOS используют только уже проверенные экспорты игрового SDL.
+                else if (relative == null || relative.warpAbsolute == null || !relative.warpAbsolute(x, y)) return false; // Linux/macOS используют только уже проверенные экспорты игрового SDL.
                 fields[0].setInt(Core.input, x); fields[1].setInt(Core.input, y); return true; // Наведение и немедленный клик читают новую позицию, не дожидаясь события ОС.
             } catch (error) { failed = true; Log.warn(Core.bundle.get("buildwheel.log.cursor-shift"), String(error)); return false; }
         },

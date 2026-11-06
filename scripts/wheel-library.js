@@ -1,8 +1,8 @@
 // ХРАНИЛИЩЕ СОХРАНЁННЫХ КОЛЁС
 "use strict"; // Запрещаем присваивания необъявленным переменным.
 
-exports.create = function() { // Загружаем библиотеку один раз при создании меню.
-    var settingsKey = "buildwheel.library"; // Храним библиотеку отдельной строкой, не затрагивая настройки действующих колёс.
+exports.create = function() { // Читаем библиотеку при первом обращении к сохранениям, а не при запуске игры.
+    var settingsKey = "buildwheel.library"; // Старую строку Settings используем только для переноса существующих записей.
     var types = [ // Эти четыре типа соответствуют постоянным вкладкам браузера сохранений.
         {id: "visual", title: Core.bundle.get("buildwheel.browser.tab.visual")},
         {id: "blocks", title: Core.bundle.get("buildwheel.browser.tab.blocks")},
@@ -11,6 +11,9 @@ exports.create = function() { // Загружаем библиотеку оди�
     ];
     var entries = []; // В памяти находятся только обычные данные, без виджетов, текстур и обработчиков кадров.
     var nextId = 1; // Счётчик обеспечивает постоянный номер сохранения независимо от его имени и положения в списке.
+    var loaded = false, committedText = null, mainFile = null, backupFile = null, temporaryFile = null; // Последний подтверждённый JSON нужен для резервной копии перед следующей записью.
+    var files = java.nio.file.Files, charset = java.nio.charset.StandardCharsets.UTF_8; // UTF-8 в отдельном файле не ограничен пределом writeUTF настроек игры.
+    var moveOptions = [java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING]; // Без атомарной замены отказываемся от записи, сохраняя прежнюю библиотеку.
 
     // ПРОВЕРКА ТИПА И КОПИРОВАНИЕ ДАННЫХ
     function validType(type) { // Не допускаем появления случайных типов вкладок в библиотеке.
@@ -32,30 +35,73 @@ exports.create = function() { // Загружаем библиотеку оди�
         return -1; // Отсутствие записи обозначаем отрицательной позицией.
     }
 
-    // ЗАГРУЗКА БИБЛИОТЕКИ
-    try { // Повреждённая строка настроек не должна препятствовать открытию радиального меню.
-        var saved = JSON.parse(String(Core.settings.getString(settingsKey, "{}"))); // Разбираем JSON только при создании хранилища.
-        if (saved != null && saved.version === 1 && Array.isArray(saved.entries)) { // Читаем только известный формат библиотеки.
-            if (isFinite(saved.nextId) && saved.nextId >= 1 && Math.floor(saved.nextId) === saved.nextId) nextId = Number(saved.nextId); // Восстанавливаем счётчик, если он корректен.
-            for (var i = 0; i < saved.entries.length; i++) { // Проверяем записи по отдельности, сохраняя исправные соседние записи.
-                var entry = saved.entries[i]; // Берём очередной сохранённый комплект.
-                if (entry == null || typeof entry.id !== "string" || entry.id.length === 0 || findIndex(entry.id) >= 0) continue; // Пропускаем записи без уникального идентификатора.
-                if (!validType(entry.type) || cleanName(entry.name).length === 0 || entry.data == null || typeof entry.data !== "object") continue; // Отбрасываем неизвестный тип, пустое имя и отсутствующие данные.
-                entries.push({id: entry.id, type: entry.type, name: cleanName(entry.name), description: typeof entry.description === "string" ? entry.description : "", data: entry.data}); // Переносим данные; старым записям без описания оставляем пустую строку.
-            }
+    // ПРОВЕРКА ФАЙЛА И ПЕРЕНОС СТАРЫХ СОХРАНЕНИЙ
+    function decode(text) { // Не превращаем повреждённую библиотеку в пустую, которую можно случайно записать поверх неё.
+        var saved = JSON.parse(text), ids = Object.create(null);
+        if (saved != null && Object.prototype.hasOwnProperty.call(saved, "version") && saved.version !== 1) { var unsupported = new Error(Core.bundle.get("buildwheel.error.library-format")); unsupported.unsupportedLibraryVersion = true; throw unsupported; } // Явно указанную неизвестную версию нельзя затирать старой резервной копией, независимо от типа её номера.
+        if (saved == null || saved.version !== 1 || !Array.isArray(saved.entries) || !isFinite(saved.nextId) || saved.nextId < 1 || saved.nextId >= 9007199254740991 || Math.floor(saved.nextId) !== saved.nextId) throw new Error(Core.bundle.get("buildwheel.error.library-format"));
+        for (var i = 0; i < saved.entries.length; i++) { // Сначала проверяем весь файл, не изменяя действующее состояние хранилища.
+            var entry = saved.entries[i];
+            if (entry == null || typeof entry.id !== "string" || entry.id.length === 0 || ids[entry.id] || !validType(entry.type) || typeof entry.name !== "string" || cleanName(entry.name).length === 0 || entry.data == null || typeof entry.data !== "object" || (entry.description !== undefined && typeof entry.description !== "string")) throw new Error(Core.bundle.get("buildwheel.error.library-format"));
+            ids[entry.id] = true;
+            if (entry.description === undefined) entry.description = ""; // Старые записи без описания сохраняют прежнее поведение.
         }
-    } catch (error) { // Синтаксическая ошибка JSON означает, что читаемого списка сохранений нет.
-        entries = []; // Оставляем пустую библиотеку; другие настройки игры не изменяем.
-        nextId = 1; // Начинаем нумерацию новой библиотеки заново.
+        return saved; // Идентификаторы, имена, описания и снимки не перенумеровываем и не пересобираем.
     }
 
-    // ЗАПИСЬ БИБЛИОТЕКИ
+    function read(path) { // Повреждённые байты UTF-8 должны вызвать восстановление, а не незаметно заменить буквы символом �.
+        return String(files.readString(path, charset)); // Публичный Files.readString проверяет кодировку, не обращаясь из Rhino к закрытым классам JDK.
+    }
+
+    function ensureLoaded() { // Повторные list/get используют память; закрытая библиотека не выполняет файловый ввод.
+        if (loaded) return;
+        try {
+            var directory = Core.settings.getDataDirectory().child("buildwheel");
+            mainFile = directory.child("library.json").file().toPath(); backupFile = directory.child("library.json.bak").file().toPath(); temporaryFile = directory.child("library.json.tmp").file().toPath();
+            var saved = null, text = null, failure = null, present = false;
+            var candidates = [mainFile, backupFile]; // Резервная копия используется только при отсутствии или повреждении основного файла.
+            for (var i = 0; i < candidates.length && saved == null; i++) {
+                if (files.notExists(candidates[i])) continue; // Ошибку доступа не принимаем за отсутствие файла: она должна запретить перезапись пустым списком.
+                present = true;
+                try { text = read(candidates[i]); saved = decode(text); } catch (error) {
+                    var nativeError = error.javaException || (error instanceof java.lang.Throwable ? error : null); // Повреждённую кодировку отличаем от отказа доступа или другой ошибки диска.
+                    if (error.unsupportedLibraryVersion || (nativeError != null && !(nativeError instanceof java.nio.charset.CharacterCodingException))) throw error; // Нечитаемый актуальный файл нельзя позднее заменить устаревшей резервной копией.
+                    failure = error; // Только повреждённые данные допускают восстановление из предыдущей подтверждённой версии.
+                }
+            }
+            if (saved == null && present) throw failure; // Нечитаемый новый файл не подменяем старым Settings или пустым списком.
+            var legacy = saved == null && Core.settings.has(settingsKey);
+            if (legacy) { text = String(Core.settings.getString(settingsKey)); saved = decode(text); }
+            if (saved != null) { entries = saved.entries; nextId = Number(saved.nextId); }
+            committedText = legacy ? null : text;
+            if (legacy) save(); // Сначала подтверждаем отдельный файл; при сбое исходная строка Settings остаётся нетронутой.
+            if (saved != null && Core.settings.has(settingsKey)) Core.settings.remove(settingsKey); // Убираем только уже перенесённую строку из памяти, не перезаписывая все настройки игры.
+            loaded = true;
+        } catch (error) {
+            entries = []; nextId = 1; committedText = null; // Не оставляем частично загруженные записи доступными для изменения.
+            throw new Error(Core.bundle.format("buildwheel.error.library-read", String(error))); // Интерфейс сообщает об ошибке вместо ложного успешного сохранения.
+        }
+    }
+
+    // АТОМАРНАЯ ЗАПИСЬ И РЕЗЕРВНАЯ КОПИЯ
+    function writeConfirmed(path, text) { // Синхронизируем временный файл до того, как он сможет заменить рабочую библиотеку.
+        var stream = new java.io.FileOutputStream(path.toFile());
+        try { stream.write(new java.lang.String(text).getBytes(charset)); stream.getFD().sync(); } finally { stream.close(); }
+        if (read(path) !== text) throw new Error(Core.bundle.get("buildwheel.error.library-format")); // Проверяем полный текст до атомарного переименования.
+    }
+
     function save() { // Вызываем запись только после добавления, переименования или удаления сохранения.
-        Core.settings.put(settingsKey, JSON.stringify({version: 1, nextId: nextId, entries: entries})); // Версия позволяет в дальнейшем отличить другой формат данных.
-        Core.settings.manualSave(); // Сразу записываем пользовательское действие на диск, не ожидая закрытия меню.
+        try {
+            var text = JSON.stringify({version: 1, nextId: nextId, entries: entries}); // Версия позволяет в дальнейшем отличить другой формат данных.
+            files.createDirectories(mainFile.getParent());
+            if (committedText != null) { writeConfirmed(temporaryFile, committedText); files.move(temporaryFile, backupFile, moveOptions); } // Сбой здесь не изменяет основной файл и прежнюю библиотеку в памяти.
+            writeConfirmed(temporaryFile, text); files.move(temporaryFile, mainFile, moveOptions); // После синхронизации заменяем файл одним атомарным действием.
+            committedText = text; // Ни одна операция, способная сорвать запись, после подтверждения не выполняется.
+        } catch (error) { throw new Error(Core.bundle.format("buildwheel.error.library-write", String(error))); }
     }
 
     function list(type, query) { // Возвращаем записи выбранной вкладки с учётом строки поиска.
+        ensureLoaded();
         var result = []; // Создаём отдельный список, чтобы сортировка интерфейса не переставляла внутренние записи.
         var search = cleanName(query).toLowerCase(); // Поиск не зависит от регистра букв и пробелов по краям.
         for (var i = entries.length - 1; i >= 0; i--) { // Сначала показываем новые сохранения.
@@ -67,38 +113,46 @@ exports.create = function() { // Загружаем библиотеку оди�
 
     // ДОБАВЛЕНИЕ И ИЗМЕНЕНИЕ СОХРАНЕНИЙ
     function add(type, name, data) { // Создаём самостоятельный снимок выбранных параметров.
+        ensureLoaded();
         name = cleanName(name); // Убираем лишние пробелы перед проверкой имени.
         if (!validType(type) || name.length === 0) throw new Error(Core.bundle.get("buildwheel.error.save-type-name")); // Не записываем неполную карточку.
         var snapshot = copyData(data); // Копирование выполняем до изменения списка, чтобы ошибка не оставила пустую запись.
-        var id; // Подбираем свободный постоянный идентификатор.
-        do { id = "wheel-" + nextId++; } while (findIndex(id) >= 0); // Счётчик и проверка защищают от повторения номера после повреждения настроек.
+        var id, previousNextId = nextId; // Подбираем свободный постоянный идентификатор.
+        do { // Не допускаем потери точности счётчика и бесконечного поиска уже занятого идентификатора.
+            if (nextId >= 9007199254740990) { nextId = previousNextId; throw new Error(Core.bundle.get("buildwheel.error.library-format")); }
+            id = "wheel-" + nextId++;
+        } while (findIndex(id) >= 0); // Счётчик и проверка защищают от повторения номера после повреждения настроек.
         var entry = {id: id, type: type, name: name, description: "", data: snapshot}; // Объединяем подпись, описание, тип и независимый комплект данных.
         entries.push(entry); // Добавляем запись в библиотеку.
-        save(); // Сохраняем запись вместе с новым значением счётчика.
+        try { save(); } catch (error) { entries.pop(); nextId = previousNextId; throw error; } // При сбое возвращаем и список, и счётчик к подтверждённому состоянию.
         return entry; // Возвращаем созданное сохранение для отображения в браузере.
     }
 
     function rename(id, name, description) { // Меняем подпись и при необходимости описание существующей карточки.
+        ensureLoaded();
         var index = findIndex(id); // Находим сохранение независимо от его прежнего имени.
         name = cleanName(name); // Проверяем уже очищенную строку из поля ввода.
         if (index < 0 || name.length === 0) return false; // Не переименовываем отсутствующую запись и не оставляем карточку без имени.
         description = description === undefined ? entries[index].description : String(description == null ? "" : description); // Необязательный аргумент позволяет сохранить прежнее описание.
         if (entries[index].name === name && entries[index].description === description) return false; // Без фактического изменения диск не трогаем.
+        var previousName = entries[index].name, previousDescription = entries[index].description;
         entries[index].name = name; // Содержимое и идентификатор сохранения остаются прежними.
         entries[index].description = description; // Сохраняем текст описания с его переносами строк.
-        save(); // Записываем новое имя на диск.
+        try { save(); } catch (error) { entries[index].name = previousName; entries[index].description = previousDescription; throw error; } // Ошибка диска не должна выглядеть успешным переименованием.
         return true; // Сообщаем интерфейсу, что список изменился.
     }
 
     function remove(id) { // Удаляем одно сохранение по постоянному идентификатору.
+        ensureLoaded();
         var index = findIndex(id); // Определяем позицию записи во внутреннем списке.
         if (index < 0) return false; // Повторное удаление не создаёт лишней записи на диск.
-        entries.splice(index, 1); // Убираем только найденную карточку.
-        save(); // Сохраняем оставшуюся библиотеку.
+        var removed = entries.splice(index, 1)[0]; // Убираем только найденную карточку.
+        try { save(); } catch (error) { entries.splice(index, 0, removed); throw error; } // При отказе записи возвращаем карточку на прежнее место.
         return true; // Сообщаем интерфейсу об успешном удалении.
     }
 
     function get(id) { // Получаем сохранение перед применением или переименованием.
+        ensureLoaded();
         var index = findIndex(id); // Проверяем, существует ли запись на момент действия.
         return index < 0 ? null : entries[index]; // Отсутствующая запись возвращается как null.
     }
@@ -113,15 +167,18 @@ exports.create = function() { // Загружаем библиотеку оди�
         var entry = memberOf(id, number); if (entry == null || entry.data.wheels[number] == null) return false;
         var wheel = entry.data.wheels[number]; name = cleanName(name); description = String(description || "");
         if ((wheel.name || "") === name && (wheel.description || "") === description) return false; // Без фактического изменения диск не трогаем.
+        var previousName = wheel.name, previousDescription = wheel.description;
         if (name.length > 0) wheel.name = name; else delete wheel.name; // Пустые метаданные не занимают место в сохранении.
         if (description.length > 0) wheel.description = description; else delete wheel.description;
-        save(); return true;
+        try { save(); } catch (error) { if (previousName === undefined) delete wheel.name; else wheel.name = previousName; if (previousDescription === undefined) delete wheel.description; else wheel.description = previousDescription; throw error; }
+        return true;
     }
 
     function replaceWheel(id, number, data) { // Очищение заменяет только один снимок; остальные девять не копируются и не переставляются.
         var entry = memberOf(id, number); if (entry == null) return false;
-        var replacement = copyData(data); entry.data.wheels[number] = replacement; // Отделяем новый снимок от любых объектов редактора.
-        save(); return true;
+        var replacement = copyData(data), previous = entry.data.wheels[number]; entry.data.wheels[number] = replacement; // Отделяем новый снимок от любых объектов редактора.
+        try { save(); } catch (error) { entry.data.wheels[number] = previous; throw error; }
+        return true;
     }
 
     return {types: types, list: list, add: add, rename: rename, remove: remove, get: get, renameWheel: renameWheel, replaceWheel: replaceWheel}; // Предоставляем меню операции с данными, не создавая сам интерфейс.

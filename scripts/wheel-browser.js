@@ -15,7 +15,7 @@ exports.create = function(api) { // Меню передаёт хранилище
     var tabButtons = []; // Ссылки нужны для переключения вкладок без постоянных update-обработчиков.
     var titles = {visual: Core.bundle.get("buildwheel.browser.save.visual"), blocks: Core.bundle.get("buildwheel.browser.save.blocks"), wheel: Core.bundle.get("buildwheel.browser.save.wheel"), wheels: Core.bundle.get("buildwheel.browser.save.wheels")}; // Заголовки штатного окна ввода имени.
     var previews = [], readyPreviews = [], showAll = {}, visibility = {}, showAllButton = null; // Состояние показа отделено от сохранений и не записывается на диск.
-    var maxReadyPreviews = 64; // Ограничиваем только кэш подготовленных данных; число сохранений и карточек не ограничено.
+    var maxHiddenPreviews = 64, trimmedFrame = -1; // При подготовке новых данных оставляем видимые модели и запас 64 давно скрытых; видимость не становится причиной аварийного выключения.
     var contentPadding = 3; // Штатный отступ Dialog: по три UI-единицы вокруг cont и вокруг его ячейки прокрутки.
     var wheelIcon = api.wheelIcon || new TextureRegionDrawable(Core.atlas.find("buildwheel-icon_wheel")); // Используем имеющуюся иконку без загрузки новой текстуры.
 
@@ -24,10 +24,15 @@ exports.create = function(api) { // Меню передаёт хранилище
         Vars.ui.showTextInput(titles[type], "@name", 1000, "", name => { // Тот же метод и размеры поля, что при сохранении схемы Mindustry.
             name = String(name).trim(); // Убираем только пробелы вокруг имени, сохраняя введённый текст внутри.
             if (name.length == 0) return; // Пустое имя не создаёт запись.
-            store.add(type, name, api.capture(type)); // Сохраняем независимый снимок параметров, а не ссылки на действующее колесо.
+            if (!accessLibrary(() => store.add(type, name, api.capture(type)))) return; // Ошибка записи не выдаётся за успешное сохранение независимого снимка.
             if (dialog.isShown()) rebuildGrid(); // Открытый браузер сразу показывает новую запись.
         });
         childDialog = api.topDialog(); // Запоминаем штатное окно, чтобы закрыть его вместе с модом при сбросе мира.
+    }
+
+    function accessLibrary(action) { // Ошибка чтения или записи остаётся внутри обработчика UI; хранилище сохраняет прежнюю версию данных.
+        try { action(); return true; } // Продолжаем работу интерфейса только после успешного чтения или записи.
+        catch (error) { Vars.ui.showInfo(Core.bundle.format("buildwheel.browser.storage-failed", String(error))); return false; } // Сообщаем причину отказа без закрытия редактора и без ложного подтверждения успеха.
     }
 
     function requestApply(entry, member) { // Ячейка набора может передать номер одного колеса, заголовок — весь набор.
@@ -42,7 +47,7 @@ exports.create = function(api) { // Меню передаёт хранилище
     function requestDelete(entry, member) { // Удаление требует такого же подтверждения, как удаление схемы.
         var message = member == null ? Core.bundle.format("buildwheel.browser.delete-confirm", entry.name) : Core.bundle.format("buildwheel.browser.clear-confirm", String(member), entry.name); // Отдельная ячейка не удаляет весь набор и не сдвигает номера.
         Vars.ui.showConfirm("@confirm", message, () => { // Имя позволяет проверить, какая именно карточка будет удалена.
-            if (member == null) store.remove(entry.id); else store.replaceWheel(entry.id, member, api.emptyWheel()); // Действующие игровые колёса не меняются.
+            if (!accessLibrary(() => { if (member == null) store.remove(entry.id); else store.replaceWheel(entry.id, member, api.emptyWheel()); })) return; // При отказе записи карточка и данные остаются прежними.
             rebuildGrid(); // Убираем карточку из списка без пересоздания окна.
         });
         childDialog = api.topDialog(); // Сохраняем ссылку на последнюю дочернюю плашку.
@@ -64,7 +69,7 @@ exports.create = function(api) { // Меню передаёт хранилище
         edit.cont.add(description).size(400, 140); // Размер поля соответствует редактору схем.
         var accept = () => { // Один обработчик обслуживает кнопку OK и Enter.
             if (member == null && String(name.getText()).trim().length == 0) return; // Отдельному колесу набора собственное имя не обязательно.
-            if (member == null) store.rename(entry.id, String(name.getText()).trim(), String(description.getText())); else store.renameWheel(entry.id, member, String(name.getText()).trim(), String(description.getText())); // Снимок блоков и визуала остаётся прежним.
+            if (!accessLibrary(() => { if (member == null) store.rename(entry.id, String(name.getText()).trim(), String(description.getText())); else store.renameWheel(entry.id, member, String(name.getText()).trim(), String(description.getText())); })) return; // Ошибка записи оставляет введённое имя и описание в открытом редакторе.
             edit.hide(); // Возвращаемся в браузер.
             rebuildGrid(); // Показываем новое имя и учитываем его в текущем поиске.
         };
@@ -80,7 +85,7 @@ exports.create = function(api) { // Меню передаёт хранилище
     }
 
     // ЛЕНИВЫЕ ПРЕВЬЮ И ОГРАНИЧЕННЫЙ КЭШ ДАННЫХ
-    function clearPreviews() { previews = []; readyPreviews = []; } // Старые виджеты и Color не удерживаются браузером после перестройки или закрытия.
+    function clearPreviews() { previews = []; readyPreviews = []; trimmedFrame = -1; } // Старые виджеты и Color не удерживаются браузером после перестройки или закрытия.
 
     function releasePreview(state) { // Выключенное превью сразу освобождает свои подготовленные данные.
         state.model = null;
@@ -95,8 +100,9 @@ exports.create = function(api) { // Меню передаёт хранилище
 
     function togglePreview(state) { // Отдельная кнопка не перестраивает сетку и не сбрасывает прокрутку.
         if (showAll[activeType]) { // Переход от общего показа к индивидуальному сохраняет состояние остальных текущих карточек.
+            var entries;
+            if (!accessLibrary(() => { entries = store.list(activeType, ""); })) return; // При ошибке чтения сохраняем прежние рисунки и состояние общей кнопки.
             showAll[activeType] = false;
-            var entries = store.list(activeType, ""); // Учитываем и записи, временно скрытые поиском; чтения файла здесь нет.
             for (var i = 0; i < entries.length; i++) { if (activeType === "wheels") { for (var number = 0; number < 10; number++) visibility[activeType][entries[i].id + "-" + number] = true; } else visibility[activeType][entries[i].id] = true; } // Только при нажатии сохраняем прежнее включение всех остальных колёс раздела.
             showAllButton.setChecked(false);
         }
@@ -110,16 +116,20 @@ exports.create = function(api) { // Меню передаёт хранилище
         Core.app.post(() => Vars.ui.showInfo(Core.bundle.format("buildwheel.browser.preview-disabled", String(error)))); // Сообщение открываем после завершения рисования и восстановления обрезки.
     }
 
-    function preparePreview(state, frame) { // Готовые данные ограничены кэшем, а не общим числом сохранений.
-        if (state.model == null) {
-            if (readyPreviews.length >= maxReadyPreviews) { // Вытесняем давно не рисовавшуюся карточку, обычно уже за пределами прокрутки.
-                var oldest = -1;
-                for (var i = 0; i < readyPreviews.length; i++) if (readyPreviews[i].frame != frame && (oldest < 0 || readyPreviews[i].frame < readyPreviews[oldest].frame)) oldest = i;
-                if (oldest < 0) throw new Error(Core.bundle.format("buildwheel.browser.preview-limit", String(maxReadyPreviews))); // Перегруженный общий показ прекращается вместо бесконечного вытеснения видимых данных.
-                releasePreview(readyPreviews[oldest]);
+    function preparePreview(state, frame) { // Подготавливаем только реально попавшие в область обрезки модели.
+        if (state.model == null && trimmedFrame != frame) { // Очищаем кэш только при необходимости новых данных и не чаще раза за кадр; неподвижный список не требует обхода кэша.
+            trimmedFrame = frame;
+            var hidden = 0, i, cached;
+            for (i = 0; i < readyPreviews.length; i++) if (readyPreviews[i].frame < frame - 1) hidden++; // Модели прошлого кадра сохраняем: их видимость в текущем ещё не определена.
+            var excess = hidden - maxHiddenPreviews, kept = 0; // Ограничение относится только к давно не рисовавшимся моделям.
+            for (i = 0; i < readyPreviews.length; i++) {
+                cached = readyPreviews[i];
+                if (excess > 0 && cached.frame < frame - 1) { cached.model = null; excess--; } // Скрытая модель восстановится лениво при возвращении в видимую область.
+                else readyPreviews[kept++] = cached; // Все текущие и прошлые видимые модели остаются независимо от разрешения и масштаба.
             }
-            state.model = api.preview(state.entry, state.member); readyPreviews.push(state); // HEX и имена блоков разрешаются один раз до выключения или вытеснения.
+            readyPreviews.length = kept; // Убираем вытесненные ссылки без создания второго массива кэша.
         }
+        if (state.model == null) { state.model = api.preview(state.entry, state.member); readyPreviews.push(state); } // HEX и имена блоков разрешаются один раз до выключения или вытеснения.
         state.frame = frame; return state.model; // Обычный кадр читает только существующие данные.
     }
 
@@ -191,11 +201,12 @@ exports.create = function(api) { // Меню передаёт хранилище
     }
 
     function rebuildGrid() { // Перестраиваем только список при поиске, смене вкладки или изменении записей.
-        if (grid == null) return; // До первого открытия список ещё не создан.
+        if (grid == null) return false; // До первого открытия список ещё не создан.
+        var entries;
+        if (!accessLibrary(() => { entries = store.list(activeType, query); })) return false; // При ошибке не очищаем уже показанные карточки и кэш рисунков.
         clearPreviews(); // Перестроенный список не удерживает Color и ссылки Block от прежних карточек.
         grid.clearChildren(); // Старые карточки больше не удерживаются сеткой.
         if (visibility[activeType] == null) visibility[activeType] = Object.create(null); // Ключи записей безопасны даже при нестандартном содержимом библиотеки.
-        var entries = store.list(activeType, query); // Фильтруем по неудаляемому типу и тексту поиска в памяти.
         var background = pane.getStyle().background; // Вычитаем реальные отступы фонов, а не предполагаем ширину рамки карточки.
         var available = Core.scene.getWidth() - dialog.getMarginLeft() - dialog.getMarginRight() - dialog.cont.getMarginLeft() - dialog.cont.getMarginRight() - Scl.scl(contentPadding * 4) - pane.getScrollBarWidth(); // Две пары штатных отступов и полоса прокрутки не должны перекрывать последнюю колонку.
         if (background != null) available -= background.getLeftWidth() + background.getRightWidth(); // Учитываем и собственный фон ScrollPane, если он задан стилем.
@@ -209,6 +220,7 @@ exports.create = function(api) { // Меню передаёт хранилище
         for (var t = 0; t < tabButtons.length; t++) tabButtons[t].button.setChecked(tabButtons[t].type == activeType); // Выделяем только текущую вкладку.
         if (showAllButton != null) showAllButton.setChecked(!!showAll[activeType]); // Смена раздела показывает его собственный режим показа.
         if (pane != null) pane.setScrollY(0); // Новый список начинается сверху.
+        return true; // Смена вкладки подтверждается только после успешного получения списка.
     }
 
     // СБОРКА ОКНА И ВОЗВРАТ В РАДИАЛЬНОЕ МЕНЮ
@@ -225,7 +237,10 @@ exports.create = function(api) { // Меню передаёт хранилище
         tabButtons = []; // Старые кнопки после перестройки больше не нужны.
         for (var i = 0; i < store.types.length; i++) { // Порядок типов задаёт хранилище.
             let type = store.types[i]; // Отдельная ссылка нужна каждому обработчику кнопки.
-            var button = tabs.button(type.title, Styles.togglet, () => { activeType = type.id; rebuildGrid(); }) // Переключаем только фильтр списка сохранений.
+            var button = tabs.button(type.title, Styles.togglet, () => { // Переключение подтверждается только после успешного чтения списка.
+                var previous = activeType; activeType = type.id;
+                if (!rebuildGrid()) { activeType = previous; for (var t = 0; t < tabButtons.length; t++) tabButtons[t].button.setChecked(tabButtons[t].type == activeType); } // При ошибке возвращаем прежнюю вкладку и её выделение, сохраняя карточки.
+            })
                 .height(50).minWidth(120).pad(2).name("buildwheel-saves-tab-" + type.id).get(); // Единый размер вкладок с читаемыми названиями.
             tabButtons.push({type: type.id, button: button}); // Запоминаем кнопку для обновления выделения при переключении.
         }
@@ -269,6 +284,7 @@ exports.create = function(api) { // Меню передаёт хранилище
             return true; // Меню поглотит соответствующее отпускание клавиши.
         },
         show: function() { // Каждое открытие начинается с вкладки «Визуал», как запрошено.
+            if (!accessLibrary(() => store.list("visual", ""))) return; // Проверяем ленивую загрузку до очистки прежнего окна; повреждённый файл не выглядит пустой библиотекой.
             activeType = "visual"; query = ""; build(); dialog.show(); // Параметры колёс при просмотре библиотеки не изменяются.
             Core.scene.setScrollFocus(pane); // Колёсико прокручивает список сохранений поверх родительского меню.
         }

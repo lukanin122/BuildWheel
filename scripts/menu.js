@@ -1068,6 +1068,12 @@ exports.create = function(api) {
     return {
         show: show,
         showPalette: function() { api.closeWheel(); palette.show(); }, // Горячая клавиша открывает палитру напрямую, не создавая родительское окно настроек.
+        canOpenPaletteFromKey: function() { // Комбинация работает поверх собственных нетекстовых окон, но не забирает ввод чужого диалога.
+            var top = topDialog(), focus = Core.scene.getKeyboardFocus(); // Проверка выполняется только при подходящей комбинации; Dialog.show сам назначает фокус диалогу.
+            if (top == null) return focus == null; // Чат и другие поля вне диалогов сохраняют текстовый ввод.
+            if (top !== dialog && String(top.name) != "buildwheel-palette") return false; // Поиск, редактор сохранения и чужое окно получают свою клавишу.
+            return focus == null || java.util.Objects.equals(focus, top); // Сам диалог не вводит текст; поле или другой дочерний элемент с фокусом не перехватываем.
+        },
         isRebinding: function() { // main.js оставляет ввод новой клавиши штатному диалогу игры.
             if (bindingModal != null && bindingModal.isShown()) return true; // Плашка открыта собственной кнопкой мода.
             if (!Core.scene.hasDialog() || Vars.ui.controls == null) return false; // В игре без окон нет ни отражения, ни дополнительного поиска.

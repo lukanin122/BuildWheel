@@ -129,7 +129,7 @@ exports.create = function(wheelView, onChanged) { // Создаём редакт
         var cell = container.getCells().first(), label = cell.get(); // Получаем штатную надпись, сохраняя её оформление.
         var available = Math.max(1, Core.scene.getWidth() - container.getMarginLeft() - container.getMarginRight() - Scl.scl(8)); // Не разрешаем длинному описанию стать шире экрана.
         if (label.getPrefWidth() > available) { // Ограничиваем только те описания, которым действительно не хватает места.
-            cell.width(available); label.setWrap(true); // Задаём ширину и включаем перенос непосредственно у Label, сохраняя размер шрифта.
+            cell.width(available / Scl.scl(1)); label.setWrap(true); // Cell сам применяет масштаб UI; переводим ширину сцены обратно в его единицы и включаем перенос текста.
         }
         container.update(() => container.keepInStage()); // Только показанная подсказка сдвигается у края экрана; обычная остаётся под началом элемента.
     }

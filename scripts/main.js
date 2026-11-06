@@ -47,7 +47,7 @@ Events.on(ClientLoadEvent, () => {
     var pendingSelection = null; // Запрос выбора, ожидающий выполнения в очереди приложения.
 
     // ВИРТУАЛЬНЫЙ КУРСОР: ОДНО ЧТЕНИЕ НАКОПИТЕЛЯ SDL НА КАДР
-    var relative = relativeModule.create(); // Проверяем DLL и готовим FFM один раз после загрузки клиента.
+    var relative = null; // Проверяем SDL и готовим FFM только при первом запросе относительного ввода.
     var virtualActive = false, virtualPosition = new Vec2(), relativeDelta = new Vec2(); // Позиция и смещение переиспользуются всё время работы мода.
     var cursorPoint = new Vec2(), sampleFrame = -1, motionActive = false; // Дополнительные события мыши подключены только при открытом колесе.
     var requestedRelative = false, previousOuter = false, previousInner = false, previousRatio = 0; // Изменение режима во время открытого колеса обрабатываем явно.
@@ -63,6 +63,8 @@ Events.on(ClientLoadEvent, () => {
     }
 
     function wantsRelative() { return !!(controls.clipOuter || controls.clipInner || controls.relativeMouse); } // Без ограничителей и отдельного разрешения используется обычный системный курсор.
+
+    function prepareRelative() { if (relative == null) relative = relativeModule.create(); return relative; } // Ранний require сохраняется, но обычный Windows-ввод не разбирает DLL.
 
     function prepareStandardCursor() { // Используем тот же PNG и центральную точку привязки, что Fonts.loadSystemCursors.
         if (standardCursorTexture != null) return true;
@@ -277,7 +279,7 @@ Events.on(ClientLoadEvent, () => {
         if (invisibleCursor != null) { invisibleCursor.dispose(); invisibleCursor = null; } // Повторное событие не должно освобождать тот же аппаратный курсор дважды.
         if (standardCursorTexture != null) { standardCursorTexture.dispose(); standardCursorTexture = null; standardCursorRegion = null; } // Освобождаем только собственную текстуру, а не курсоры Mindustry.
         if (absoluteCursor != null) absoluteCursor.dispose(); // Разовый сдвиг не захватывает мышь; освобождаем только его буферы FFM.
-        relative.dispose(); // Закрываем FFM-память только после отключения своего режима SDL.
+        if (relative != null) relative.dispose(); // Закрываем FFM-память только после отключения своего режима SDL.
     });
     //==============================================================
 
@@ -285,7 +287,7 @@ Events.on(ClientLoadEvent, () => {
     function closeWheel() {
         wheelOpen = false; // Закрытие сначала отключает обработку движения, даже если до этого был показан номер.
         wheel.update(null); virtualActive = false; // Сначала прекращаем чтение накопителя и отображение виртуального указателя.
-        try { relative.end(); } catch (error) { Log.err(Core.bundle.get("buildwheel.log.sdl-release"), String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
+        try { if (relative != null) relative.end(); } catch (error) { Log.err(Core.bundle.get("buildwheel.log.sdl-release"), String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
         setMotionEnabled(false); // Убираем обработчик наведения из цепочки ввода.
         hideWheelNumber(); // Номер и временно скрытый курсор не должны оставаться после выбора, отмены или открытия окна.
         wheel.resetHoverSound(); // Повторное открытие начинает новую историю звука наведения.
@@ -305,7 +307,7 @@ Events.on(ClientLoadEvent, () => {
         if (!virtualActive && (mousePosition.x != originalX || mousePosition.y != originalY)) { // Обычную мышь переносим только при реальном сдвиге центра, без обработки каждого движения.
             Core.scene.getViewport().project(cursorPoint.set(mousePosition)); // Получаем экранные координаты Arc с осью Y снизу вверх.
             var x = Math.round(cursorPoint.x), y = Math.round(cursorPoint.y), moved = x == Core.input.mouseX() && y == Core.input.mouseY(); // Целая позиция совпадает с точностью системной мыши.
-            try { if (!moved) { if (absoluteCursor == null) absoluteCursor = relativeModule.createWarp(relative); moved = absoluteCursor.move(x, y); } }
+            try { if (!moved) { if (absoluteCursor == null) absoluteCursor = relativeModule.createWarp(OS.isWindows ? relative : prepareRelative()); moved = absoluteCursor.move(x, y); } } // Windows переиспользует уже проверенный провайдер, но не создаёт его ради обычного сдвига.
             catch (error) { Log.warn(Core.bundle.get("buildwheel.log.absolute-shift"), String(error)); } // Ошибка не оставляет колесо отдельно от фактического курсора.
             if (moved) Core.scene.screenToStageCoordinates(mousePosition.set(Core.input.mouseX(), Core.input.mouseY())); // Фактическая целая позиция курсора становится центром, включая крайний пиксель окна.
             else mousePosition.set(originalX, originalY); // При отказе платформы сохраняем обычное открытие непосредственно под мышью.
@@ -337,10 +339,11 @@ Events.on(ClientLoadEvent, () => {
         Core.scene.screenToStageCoordinates(mousePosition); //!переводим в координаты сцены интерфейса (проверить что конкретно за интерфейс)
         setWheelNumber(number, true); // Выбираем данные и диаметр именно открываемого номера.
         requestedRelative = wantsRelative(); // Независимый переключатель и оба ограничителя являются тремя условиями включения одного механизма.
+        if (requestedRelative) prepareRelative(); // Обычное открытие не создаёт относительный адаптер; Linux/macOS могут подготовить его отдельно для проверенного SDL warp.
         var nativeReady = requestedRelative && relative.available; // Другая платформа сохраняет обычный выбор; занятый или потерянный захват не забираем.
         if (nativeReady && !controls.customArrow && !prepareStandardCursor()) { closeWheel(); return; }
         try { virtualActive = nativeReady && relative.begin(); } catch (error) { closeWheel(); Log.warn("BuildWheel SDL: @", String(error)); return; } // Без запроса relative mode даже не вызываем begin.
-        if ((nativeReady || relative.active) && !virtualActive) { closeWheel(); return; } // При ошибке входа или чужом relative mode отменяем именно это открытие.
+        if ((nativeReady || (relative != null && relative.active)) && !virtualActive) { closeWheel(); return; } // При ошибке входа или чужом relative mode отменяем именно это открытие.
         positionWheel(); // Сдвиг у края работает с обычным и относительным вводом.
         sampleFrame = Core.graphics.getFrameId(); // Входной накопитель уже очищен, старые события этого кадра не смещают указатель.
         //* Позиция фиксируется в момент открытия и не следует за мышью.
@@ -444,7 +447,7 @@ Events.on(ClientLoadEvent, () => {
         if (!windowFocused) return false; // Не выполняем отложенную команду после потери фокуса игрового окна.
         if (settingsMenu.handleKeyDown(key)) return true; // Сначала даём собственным открытым окнам обработать закрытие.
         if (settingsMenu.isRebinding()) return false; // Новую клавишу принимает штатная плашка, а не действие мода.
-        if (matches(controls.bindings.paletteModifier, controls.bindings.paletteKey, key) && (!Vars.state.isMenu() || controls.paletteInMenu)) { // Палитра доступна поверх других окон, в том числе вне игры при разрешении.
+        if (matches(controls.bindings.paletteModifier, controls.bindings.paletteKey, key) && (!Vars.state.isMenu() || controls.paletteInMenu) && (settingsMenu.canOpenPaletteFromKey != null ? settingsMenu.canOpenPaletteFromKey() : !Core.scene.hasKeyboard() && !Core.scene.hasDialog())) { // Меню отличает фокус собственного диалога от ввода текста; чужие окна сохраняют клавишу.
             settingsMenu.showPalette(); return captureKey(key); // Не открываем промежуточное «Радиальное меню».
         }
         if (canOpenWheel()) { // Все способы открытия «колеса выбора» используют одно условие.
@@ -583,7 +586,8 @@ Events.on(ClientLoadEvent, () => {
                 if (button == KeyCode.mouseLeft) {
                     sampleRelative();
                     if (!wheelOpen) return true; // Ошибка чтения или потеря фокуса отменяет выбор.
-                    pointerPosition(mousePosition);
+                    if (virtualActive) pointerPosition(mousePosition);
+                    else Core.scene.screenToStageCoordinates(mousePosition.set(screenX, screenY)); // Очередь Arc хранит точку этого нажатия; общий кэш мыши уже может содержать последующее движение.
                     var sector = sectorAt(mousePosition.x, mousePosition.y);
                     var block = sector == -1 ? null : wheelSlots[activeWheelNumber][sector];
                     if (canSelectBlock(block)) selectedBlock = block;
