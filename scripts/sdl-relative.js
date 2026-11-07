@@ -166,16 +166,66 @@ exports.create = function() {
             if (!(expectedWindow > 0 && expectedWindow <= 9007199254740991 && Math.floor(expectedWindow) == expectedWindow) || Core.app.getWindow() != window) throw new Error(Core.bundle.get("buildwheel.sdl.linux.window"));
             if ((Number(wasInit.invokeWithArguments(array([new java.lang.Integer("32")]))) & 32) == 0) throw new Error(Core.bundle.get("buildwheel.sdl.linux.video"));
             if (addr(currentWindow.invokeWithArguments(none)) != expectedWindow) throw new Error(Core.bundle.get("buildwheel.sdl.linux.context")); // SDL возвращает собственное окно; сравнение адресов не разыменовывает окно Arc.
-            var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "Linux SDL2 " + version[0] + "." + version[1] + "." + version[2], image: owner.path, allowed: () => true}; // Публичный Linux API не раскрывает внутренний флаг warp fallback.
+            var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "Linux SDL2 " + version[0] + "." + version[1] + "." + version[2], image: owner.path, relativeAvailable: false}; // Обычный сдвиг доступен отдельно от подтверждённого нативного relative mode.
+            var driverText = "";
             try { // Разовый перенос обычного указателя не является условием доступности относительного ввода.
                 var warp = find.invoke(symbols, ["SDL_WarpMouseInWindow"]).orElseThrow();
                 var driver = find.invoke(symbols, ["SDL_GetCurrentVideoDriver"]).orElseThrow();
                 exports.linuxImage(maps, {warp: addr(warp), driver: addr(driver), currentWindow: addresses.currentWindow}, 3); // Принадлежность окна уже проверена; оба дополнительных экспорта должны находиться в том же образе SDL.
                 var driverName = bind(driver, address, []).invokeWithArguments(none); // Getter без аргументов не получает неподтверждённых указателей.
                 var getDriverString = seg.getMethod("getString", [java.lang.Long.TYPE]);
-                var driverText = addr(driverName) == 0 ? "" : String(getDriverString.invoke(reinterpret.invoke(driverName, [new java.lang.Long("64")]), [zero])); // Имя принадлежит проверенной SDL; чтение ограничено длиной имени backend.
+                driverText = addr(driverName) == 0 ? "" : String(getDriverString.invoke(reinterpret.invoke(driverName, [new java.lang.Long("64")]), [zero])); // Имя принадлежит проверенной SDL; чтение ограничено длиной имени backend.
                 if (driverText == "x11") found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // Только подтверждённый X11 поддерживает обычный warp; Wayland и неизвестный backend не смещают колесо и кэш Arc.
             } catch (unsupportedWarp) {} // Отсутствующий экспорт отключает только сдвиг обычного указателя.
+            // X11: ПОДТВЕРЖДЕНИЕ XINPUT2 ЧЕРЕЗ ПУБЛИЧНЫЕ API, БЕЗ ВНУТРЕННИХ ПОЛЕЙ SDL
+            try { // Ни setter, ни getter режима SDL не отличают нативный ввод от автоматической warp-эмуляции.
+                var release = version[0] + "." + version[1] + "." + version[2];
+                if (driverText != "x11" || !/^(2\.0\.10|2\.30\.0|2\.32\.8)$/.test(release) || Number(layout.getMethod("byteSize", []).invoke(address, none)) != 8) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified")); // Для этих версий проверено: X11 setter успешен только после инициализации XInput2; другие backend/версии требуют отдельной проверки.
+                function sdlSymbol(name) { var p = find.invoke(symbols, [name]).orElseThrow(); exports.linuxImage(maps, {candidate: addr(p), owner: addresses.currentWindow}, 2); return p; } // Все дополнительные экспорты обязаны принадлежать уже подтверждённой SDL.
+                var wmInfo = bind(sdlSymbol("SDL_GetWindowWMInfo"), integer, [address, address]);
+                var wm = allocate.invoke(arena, [new java.lang.Long("72"), eight]), asBytes = seg.getMethod("asByteBuffer", []);
+                var wmBytes = asBytes.invoke(wm, none).order(java.nio.ByteOrder.nativeOrder()); // Публичный SDL_SysWMinfo LP64: версия, subsystem, union из 64 байт.
+                wmBytes.put(0, version[0]); wmBytes.put(1, version[1]); wmBytes.put(2, version[2]);
+                var windowPointer = ofAddress.invoke(null, [new java.lang.Long(String(window))]); // Принадлежность окна уже установлена сравнением SDL_GL_GetCurrentWindow выше.
+                if (Number(wmInfo.invokeWithArguments(array([windowPointer, wm]))) != 1 || wmBytes.getInt(4) != 2) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified"));
+                var display = getPointer.invoke(wm, [address, eight]);
+                if (addr(display) == 0) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified"));
+                function xLibrary(pattern, names) { // SDL уже загрузила X11/Xi через dlopen(RTLD_LOCAL); повторная ссылка удерживает этот же образ до Dispose.
+                    var paths = [], lines = maps.split(/\r?\n/);
+                    for (var i = 0; i < lines.length; i++) { var m = /^[0-9a-f]+-[0-9a-f]+\s+\S*x\S*\s+\S+\s+\S+\s+\d+\s+(\/[^\r\n]+)$/.exec(lines[i]); if (m != null) { var path = m[1].replace(/\\([0-7][0-7][0-7])/g, (all, code) => String.fromCharCode(parseInt(code, 8))); if (pattern.test(path)) paths.push(path); } } // Считаем исполняемые отображения, включая повторно загруженные экземпляры одного файла.
+                    if (paths.length != 1) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified")); // Не загружаем отсутствующую библиотеку по общему имени и не выбираем один из нескольких экземпляров.
+                    var library = F.SymbolLookup.libraryLookup(java.nio.file.Paths.get(paths[0]), arena), functions = {}, locations = {};
+                    for (var i = 0; i < names.length; i++) { var p = find.invoke(library, [names[i]]).orElseThrow(); functions[names[i]] = p; locations[names[i]] = addr(p); }
+                    if (exports.linuxImage(maps, locations, names.length).path != paths[0]) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified")); // Адреса проверяются по карте ДО открытия ссылки, с учётом ASLR.
+                    return functions;
+                }
+                var x11 = xLibrary(/\/libX11\.so\.6(?:\.[0-9]+)*$/, ["XDefaultRootWindow", "XFree"]), xi = xLibrary(/\/libXi\.so\.6(?:\.[0-9]+)*$/, ["XIGetSelectedEvents"]);
+                var root = bind(x11.XDefaultRootWindow, F.ValueLayout.JAVA_LONG, [address]).invokeWithArguments(array([display])); // X11 Window — unsigned long, восемь байт в LP64.
+                var selected = bind(xi.XIGetSelectedEvents, address, [address, F.ValueLayout.JAVA_LONG, address]);
+                var free = bind(x11.XFree, integer, [address]), countBuffer = allocate.invoke(arena, [four, four]);
+                var masks = selected.invokeWithArguments(array([display, root, countBuffer])), rawMotion = false;
+                if (addr(masks) != 0) try { // XIGetSelectedEvents возвращает подписки ИМЕННО клиента SDL, а не других клиентов сервера X11.
+                    var count = Number(getInt.invoke(countBuffer, readArgs));
+                    if (count < 1 || count > 64) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified"));
+                    var maskBytes = asBytes.invoke(reinterpret.invoke(masks, [new java.lang.Long(String(count * 16))]), none).order(java.nio.ByteOrder.nativeOrder()); // XIEventMask LP64: deviceid, mask_len, указатель.
+                    for (var i = 0; i < count; i++) if (maskBytes.getInt(i * 16) == 1) { // XIAllMasterDevices используется SDL при успешной инициализации XInput2.
+                        var length = maskBytes.getInt(i * 16 + 4);
+                        if (length < 3 || length > 128) continue;
+                        var mask = getPointer.invoke(reinterpret.invoke(masks, [new java.lang.Long(String(count * 16))]), [address, new java.lang.Long(String(i * 16 + 8))]);
+                        if (addr(mask) != 0 && (Number(asBytes.invoke(reinterpret.invoke(mask, [new java.lang.Long(String(length))]), none).get(2)) & 2) != 0) rawMotion = true; // XI_RawMotion = 17: байт 2, бит 1.
+                    }
+                } finally { free.invokeWithArguments(array([masks])); } // Единственный выделенный Xlib массив освобождается даже при ошибке проверки.
+                if (!rawMotion) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified")); // В проверенных SDL подписка появляется только после успешной инициализации XInput2.
+                var hint = bind(sdlSymbol("SDL_GetHintBoolean"), integer, [address, integer]);
+                var allocateString = arenas.getMethod("allocateFrom", [type("java.lang.String")]);
+                var hintArgs = array([allocateString.invoke(arena, ["SDL_MOUSE_RELATIVE_MODE_WARP"]), new java.lang.Integer("0")]);
+                var clear = downcall.invoke(linker, array([sdlSymbol("SDL_ClearError"), F.FunctionDescriptor.ofVoid([]), options]));
+                function forcedWarp() { return Number(hint.invokeWithArguments(hintArgs)) != 0; } // Явная эмуляция проверяется при каждом открытии, без опроса на движении мыши.
+                found.ready = function() { if (!forcedWarp()) { result.reason = ""; return true; } result.reason = Core.bundle.get("buildwheel.sdl.warp-rejected"); return false; };
+                found.beforeBegin = () => clear.invokeWithArguments(none);
+                found.allowed = () => !forcedWarp() && String(SDL.SDL_GetError()).length == 0; // Дополнительно откатываем включение, если нативный backend сообщил об ошибке.
+                found.relativeAvailable = true;
+            } catch (unverifiedNative) { found.relativeReason = String(unverifiedNative); } // Непроверенный relative mode отключён; обычный ввод и подтверждённый X11 warp сохраняются.
             maps = null; addresses = null; pointers = null; names = null; return found; // Текст карты памяти не остаётся в рабочих замыканиях.
         }
         // MACOS: ЭКСПОРТЫ ЗАГРУЖЕННОЙ SDL И ПРОВЕРКА ОТЛОЖЕННОГО ВХОДА COCOA
@@ -304,8 +354,8 @@ exports.create = function() {
             catch (error) { return fail(error); }
         };
         result.dispose = function() { disposing = true; var released = result.end(); stopReleaseRetry(); if (released && arena != null) { close.invoke(arena, none); arena = null; } result.available = false; }; // После Dispose не опрашиваем окно; при незавершённом освобождении память остаётся до завершения процесса.
-        result.available = true; result.reason = ""; result.hash = nativeFunctions.hash; result.automatic = nativeFunctions.automatic; // Индексы PE и байты DLL после выхода не нужны обработчику движения.
-        Log.info(Core.bundle.get("buildwheel.log.sdl-ready"), nativeFunctions.description);
+        result.available = nativeFunctions.relativeAvailable !== false; result.reason = result.available ? "" : nativeFunctions.relativeReason; result.hash = nativeFunctions.hash; result.automatic = nativeFunctions.automatic; // Индексы PE и байты DLL после выхода не нужны обработчику движения.
+        if (result.available) Log.info(Core.bundle.get("buildwheel.log.sdl-ready"), nativeFunctions.description); else Log.warn(Core.bundle.get("buildwheel.log.sdl-disabled"), result.reason);
     } catch (error) {
         result.available = false; result.active = false; result.reason = String(error); // Недоступность FFM, другая DLL или отличающийся машинный код дают безопасный отказ.
         if (arena != null) try { type("java.lang.foreign.Arena").getMethod("close", []).invoke(arena, []); arena = null; } catch (ignored) {} // До проверки адресов приватный режим ещё не включался.
