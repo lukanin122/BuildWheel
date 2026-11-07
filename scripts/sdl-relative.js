@@ -203,7 +203,7 @@ exports.create = function() {
                 var root = bind(x11.XDefaultRootWindow, F.ValueLayout.JAVA_LONG, [address]).invokeWithArguments(array([display])); // X11 Window — unsigned long, восемь байт в LP64.
                 var selected = bind(xi.XIGetSelectedEvents, address, [address, F.ValueLayout.JAVA_LONG, address]);
                 var free = bind(x11.XFree, integer, [address]), countBuffer = allocate.invoke(arena, [four, four]);
-                var masks = selected.invokeWithArguments(array([display, root, countBuffer])), rawMotion = false;
+                var masks = selected.invokeWithArguments(array([display, new java.lang.Long(String(root)), countBuffer])), rawMotion = false; // Rhino превращает результат XDefaultRootWindow в число JS; FFM требует снова упаковать Window именно как Java Long.
                 if (addr(masks) != 0) try { // XIGetSelectedEvents возвращает подписки ИМЕННО клиента SDL, а не других клиентов сервера X11.
                     var count = Number(getInt.invoke(countBuffer, readArgs));
                     if (count < 1 || count > 64) throw new Error(Core.bundle.get("buildwheel.sdl.linux.native-unverified"));
