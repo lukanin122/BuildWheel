@@ -39,6 +39,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-java@v5
+        if: runner.os == 'Linux' || !contains(github.event.head_commit.message, '[linux-only]')
         with:
           distribution: temurin
           java-version: '25'
@@ -49,12 +50,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsdl2-2.0-0 xvfb openbox xdotool xinput x11-utils mesa-utils libgl1-mesa-dri libegl1 libgles2 weston wayland-utils dbus-x11
       - name: Execute isolated platform tests
+        if: runner.os == 'Linux' || !contains(github.event.head_commit.message, '[linux-only]')
         env:
           EXPECTED_MACHINE: ${{ matrix.machine }}
           PLATFORM_LABEL: ${{ matrix.name }}
         run: python3 tests/platform/run.py --output "$RUNNER_TEMP/buildwheel-platform-results"
       - name: Save native diagnostics
-        if: always()
+        if: always() && (runner.os == 'Linux' || !contains(github.event.head_commit.message, '[linux-only]'))
         uses: actions/upload-artifact@v4
         with:
           name: buildwheel-${{ matrix.runner }}-${{ github.run_attempt }}

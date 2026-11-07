@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Actual target-OS CI orchestration. Test data and native diagnostics live outside the checkout."""
-import argparse, hashlib, json, os, pathlib, platform, shutil, signal, subprocess, sys, time, urllib.request, zipfile
+import argparse, hashlib, json, os, pathlib, platform, re, shutil, signal, subprocess, sys, time, urllib.request, zipfile
 
 JAR_URL = "https://github.com/Anuken/Mindustry/releases/download/v160.7/Mindustry.jar"
 JAR_SHA = "36d94941a1639478ad1d9be25a9d802c6f77552f400c6da0338b7b019f63a0d1"
@@ -138,6 +138,7 @@ def nested_wayland(base_env):
             if socket.exists():
                 result = capture(["wayland-info"], OUT / "wayland-info.log", env, timeout=10)
                 if result["exit"] == 0:
+                    capture(["xwininfo", "-root", "-tree"], OUT / "weston-window-tree.log", env, timeout=5)
                     env["MINDUSTRY_FORCE_WAYLAND"] = "1"
                     env["SDL_VIDEODRIVER"] = "wayland"
                     save(OUT / "wayland-environment.json", {"renderer": renderer, "socket": str(socket), "input": "XTest -> real Weston X11 backend -> actual Wayland protocol -> SDL"})
@@ -148,6 +149,13 @@ def nested_wayland(base_env):
     return None
 
 def x_window(env, wayland):
+    if wayland:
+        # Weston13 does not guarantee the historical window title. Its X11 backend
+        # reports the actual XID; do not silently skip all input when a title changed.
+        for logfile in [OUT / "weston-gl.log", OUT / "weston-pixman.log"]:
+            if logfile.exists():
+                matches = re.findall(r"window id (\d+)", logfile.read_text(encoding="utf-8", errors="replace"))
+                if matches: return matches[-1]
     pattern = "^Weston Compositor" if wayland else "^BuildWheel isolated native probe$"
     p = subprocess.run(["xdotool", "search", "--name", pattern], env=env, capture_output=True, text=True)
     lines = p.stdout.splitlines()
@@ -161,7 +169,10 @@ def inject(env, proc, case, mode, wayland=False):
             value = {"source": "CoreGraphics synthetic HID", "mode": mode, "exit": result.returncode, "stdout": result.stdout[-4000:], "stderr": result.stderr[-1000:]}
         elif IS_LINUX:
             window = x_window(env, wayland)
-            if window is None: return
+            if window is None:
+                with logfile.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"source":"XTest","mode":mode,"limitation":"Target X11 window was not found; no motion injected"}) + "\n")
+                return
             commands = []
             if mode == "prepare":
                 commands = [["xdotool", "windowactivate", "--sync", window],
