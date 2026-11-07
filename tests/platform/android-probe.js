@@ -132,11 +132,11 @@
     step(function() { check(wheel() != null, "Android wheel reopened"); computer(false); });
     step(function() { check(!menu.computerInputActive() && wheel() == null, "Runtime switch to MobileInput closed wheel safely"); chord(AndroidKey.KEYCODE_1); });
     step(function() { check(wheel() == null, "MobileInput did not intercept wheel chord"); computer(true); key(AndroidKey.KEYCODE_CTRL_LEFT, true); });
-    step(function() { computer(false); tap(AndroidKey.KEYCODE_1); }); // Detect handler change inside the actual fixed-length Android key queue.
+    step(function() { computer(false); tap(AndroidKey.KEYCODE_1); }); // Change handler between frames while a previously processed Ctrl remains held.
     step(function() { key(AndroidKey.KEYCODE_CTRL_LEFT, false); });
     step(function() { computer(true); tap(AndroidKey.KEYCODE_1); });
     step(function() {
-        check(!Core.input.ctrl() && wheel() == null, "Mode change during input drain did not strand Ctrl or create a phantom wheel chord");
+        check(!Core.input.ctrl() && wheel() == null, "Mode change while Ctrl held did not strand Ctrl or create a phantom wheel chord");
         controls.set("relativeMouse", true); controls.set("clipOuter", true); controls.set("clipInner", true); chord(AndroidKey.KEYCODE_1);
     });
     step(function() { check(wheel() != null, "Unsupported Android relative settings preserve absolute wheel opening"); tap(AndroidKey.KEYCODE_ESCAPE); });

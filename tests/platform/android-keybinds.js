@@ -129,10 +129,18 @@ function buildWheelAndroidKeyDiagnostics(api) {
                     if (String(bind.name).indexOf("buildwheel-") === 0) count++;
                 }
                 diag(count === 16 && registryCount === Packages.arc.input.KeyBind.all.size, "existing sixteen platform-independent bindings", "count=" + count);
+                var references = [binds.wheelModifier, binds.menuModifier, binds.menuKey, binds.paletteModifier, binds.paletteKey, binds.scrollKey].concat(binds.wheels);
+                for (var r = 0; r < references.length; r++) diag(references[r] instanceof Packages.arc.input.KeyBind
+                    && Packages.arc.input.KeyBind.all.contains(references[r], true), "controls reference registered universal KeyBind", references[r].name);
             }, 12);
             if (initial) {
                 for (var f = 0; f < families.length; f++) for (var configured = 0; configured < 2; configured++) for (var physical = 0; physical < 2; physical++) familyMatrix(families[f], configured, physical);
                 for (var p = 0; p < families.length; p++) for (var side = 0; side < 2; side++) primarySide(families[p], side);
+                setup("All digits without secondary", digits);
+                for (var number = 1; number <= 10; number++) (function(n) {
+                    tap(A.KEYCODE_0 + n, function() { expect("wheel", n); });
+                })(number % 10);
+                close();
                 for (var u = 0; u < families.length; u++) for (var s = 0; s < 2; s++) uiBind("wheel-modifier", binds.wheelModifier, families[u].raw[s], families[u].keys[s]);
                 uiBind("wheel-modifier", binds.wheelModifier, A.KEYCODE_F2, KeyCode.f2);
                 uiBind("wheel-1", binds.wheels[1], A.KEYCODE_U, KeyCode.u);
