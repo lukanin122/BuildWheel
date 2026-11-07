@@ -93,6 +93,12 @@ public class NativeProbe implements ApplicationListener {
                     cx.evaluateString(scope,new String(zip.getInputStream(zip.getEntry("scripts/global.js")).readAllBytes(),StandardCharsets.UTF_8),"global.js",1);
                 }
                 String source=Files.readString(mod.resolve("scripts/sdl-relative.js"));
+                if(Boolean.getBoolean("buildwheel.probe.traceLinuxFailure")) {
+                    String marker="catch (unverifiedNative) { found.relativeReason = String(unverifiedNative); }";
+                    if(!source.contains(marker))throw new IllegalStateException("Diagnostic catch marker changed");
+                    source=source.replace(marker,"catch (unverifiedNative) { if(unverifiedNative.javaException != null) unverifiedNative.javaException.printStackTrace(); Log.err(String(unverifiedNative.stack)); found.relativeReason = String(unverifiedNative); }");
+                    report.put("catchDiagnosticsInstrumented",true); // Only an error print is inserted; explicitly not byte-for-byte execution in this diagnostic run.
+                }
                 Function factory=(Function)cx.evaluateString(scope,"(function(){var exports={};\n"+source+"\n;return exports;})","unchanged-sdl-relative.js",1);
                 module=(Scriptable)factory.call(cx,scope,scope,new Object[0]);
             }

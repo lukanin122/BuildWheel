@@ -203,6 +203,7 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
     if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
     if fixture_sdl: env["LD_LIBRARY_PATH"] = str(fixture_sdl) + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     flags = ["-DSDL2_STATIC=1"] if system_sdl else []
+    if IS_LINUX: flags.append("-Dbuildwheel.probe.traceLinuxFailure=true")
     if raw_sdl: flags.append("-Dbuildwheel.probe.raw-sdl=true")
     command = java_command("NativeProbe", case, JAR, ROOT, case, scenario, "3", extra_flags=flags)
     save(case / "launch.json", {"command": command, "environment": {k: env.get(k) for k in ["DISPLAY","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER","XDG_RUNTIME_DIR","LD_LIBRARY_PATH"]}, "systemSDL": system_sdl, "faultInjectedSDL":bool(fixture_sdl)})
