@@ -15,6 +15,8 @@ import arc.util.Log;
 import arc.util.ScreenUtils;
 import mindustry.Vars;
 import mindustry.game.EventType.ClientLoadEvent;
+import arc.input.KeyBind;
+import arc.input.KeyCode;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -29,6 +31,13 @@ public final class BuildWheelAndroidProbe {
     static Fi output;
     static JSONArray checks = new JSONArray();
     static JSONArray snapshots = new JSONArray();
+    static JSONArray keyDiagnostics = new JSONArray(), inputTrace = new JSONArray();
+    static int diagnosticFailures;
+    static final java.util.concurrent.atomic.AtomicInteger submittedKeys = new java.util.concurrent.atomic.AtomicInteger();
+    static volatile int enqueuedKeys;
+    static volatile long enqueuedFrame;
+    static final java.util.HashSet<Integer> heldRaw = new java.util.HashSet<>(); // UI-thread only; creates realistic Android modifier meta state.
+    static final java.util.HashMap<Integer, Long> keyDownTimes = new java.util.HashMap<>();
     static String stage;
     static volatile String dispatchFailure;
     static volatile boolean completed;
@@ -76,8 +85,8 @@ public final class BuildWheelAndroidProbe {
             try {
                 Core.app.addListener(new ApplicationListener() {
                     @Override public void update() {
-                        if (!completed && System.nanoTime() - started > 180_000_000_000L)
-                            fail("Android probe exceeded 180 seconds after launch");
+                        if (!completed && System.nanoTime() - started > 600_000_000_000L)
+                            fail("Android probe exceeded 600 seconds after launch (including expanded key diagnostics)");
                         if (!completed && dispatchFailure != null) fail(dispatchFailure);
                     }
                 });
@@ -101,16 +110,121 @@ public final class BuildWheelAndroidProbe {
 
     /** Events are posted to the UI thread and processed by the actual next GL frames. */
     public static void key(int keyCode, boolean down) {
+        keys(new int[]{keyCode}, new boolean[]{down});
+    }
+
+    /** One UI task preserves explicit order; the normal AndroidInput queue remains responsible for delivery. */
+    public static int keys(int[] codes, boolean[] down) {
+        if (codes.length != down.length) throw new IllegalArgumentException("Key batch length");
+        final int ticket = submittedKeys.incrementAndGet();
         activity.runOnUiThread(() -> {
             try {
                 View view = ((AndroidGraphics) Core.graphics).getView();
                 view.requestFocus();
-                long time = SystemClock.uptimeMillis();
-                KeyEvent event = new KeyEvent(time, time, down ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
-                    keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD);
-                view.dispatchKeyEvent(event);
+                for (int i = 0; i < codes.length; i++) {
+                    int code = codes[i]; long time = SystemClock.uptimeMillis();
+                    if (down[i]) { heldRaw.add(code); keyDownTimes.put(code, time); } else heldRaw.remove(code);
+                    int meta = 0;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_SHIFT_LEFT)) meta |= KeyEvent.META_SHIFT_LEFT_ON;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_SHIFT_RIGHT)) meta |= KeyEvent.META_SHIFT_RIGHT_ON;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_ALT_LEFT)) meta |= KeyEvent.META_ALT_LEFT_ON;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_ALT_RIGHT)) meta |= KeyEvent.META_ALT_RIGHT_ON;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_CTRL_LEFT)) meta |= KeyEvent.META_CTRL_LEFT_ON;
+                    if (heldRaw.contains(KeyEvent.KEYCODE_CTRL_RIGHT)) meta |= KeyEvent.META_CTRL_RIGHT_ON;
+                    meta = KeyEvent.normalizeMetaState(meta);
+                    KeyEvent event = new KeyEvent(keyDownTimes.getOrDefault(code, time), time, down[i] ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
+                        code, 0, meta, -1, 0, 0, InputDevice.SOURCE_KEYBOARD);
+                    boolean consumed = view.dispatchKeyEvent(event);
+                    trace("raw", "", code + ":" + (down[i] ? "down" : "up"), "meta=" + meta + ",viewConsumed=" + consumed + ",ticket=" + ticket);
+                    if (!down[i]) keyDownTimes.remove(code);
+                }
+                enqueuedFrame = Core.graphics.getFrameId(); enqueuedKeys = ticket;
             } catch (Throwable error) { dispatchFailure = error.toString(); }
         });
+        return ticket;
+    }
+
+    public static boolean keysProcessed(int ticket) {
+        // Frame id increments after processEvents. Two transitions also cover enqueue just after that batch's drain.
+        return enqueuedKeys >= ticket && Core.graphics.getFrameId() > enqueuedFrame + 1;
+    }
+
+    public static synchronized void trace(String kind, String scenario, String key, String details) {
+        try {
+            if (inputTrace.length() < 6000) inputTrace.put(new JSONObject().put("kind", kind).put("scenario", scenario)
+                .put("key", key).put("details", details).put("frame", Core.graphics.getFrameId()));
+        } catch (Exception error) { throw new RuntimeException(error); }
+    }
+
+    public static synchronized void diagnostic(boolean passed, String name, String details) {
+        try {
+            keyDiagnostics.put(new JSONObject().put("check", name).put("pass", passed).put("details", details));
+            if (!passed) diagnosticFailures++;
+        } catch (Exception error) { throw new RuntimeException(error); }
+    }
+
+    static JSONObject captureBindings() throws Exception {
+        JSONObject result = new JSONObject(), fields = new JSONObject(), values = new JSONObject();
+        for (KeyBind bind : KeyBind.all) if (bind.name.startsWith("buildwheel-")) {
+            values.put(bind.name, new JSONObject().put("key", bind.value.key == null ? -1 : bind.value.key.ordinal())
+                .put("min", bind.value.min == null ? -1 : bind.value.min.ordinal()).put("max", bind.value.max == null ? -1 : bind.value.max.ordinal()));
+            for (String suffix : new String[]{"-single", "-key", "-min", "-max"}) {
+                String key = "keybind-default-keyboard-" + bind.name + suffix;
+                JSONObject field = new JSONObject().put("present", Core.settings.has(key));
+                if (Core.settings.has(key)) {
+                    Object value = Core.settings.get(key, null);
+                    if (!(value instanceof Boolean) && !(value instanceof Integer)) throw new IllegalStateException("Unexpected keybind Settings type: " + key);
+                    field.put("boolean", value instanceof Boolean).put("value", value);
+                }
+                fields.put(key, field);
+            }
+        }
+        return result.put("values", values).put("fields", fields);
+    }
+
+    public static void bindingBaseline(boolean create) throws Exception {
+        Fi file = output.parent().child("keybind-baseline.json");
+        if (create) { if (file.exists()) throw new IllegalStateException("Key baseline already exists"); file.writeString(captureBindings().toString(), false, "UTF-8"); }
+        else if (!file.exists()) throw new IllegalStateException("Missing original key baseline");
+    }
+
+    public static void restoreBindings() throws Exception {
+        JSONObject saved = new JSONObject(output.parent().child("keybind-baseline.json").readString("UTF-8")), fields = saved.getJSONObject("fields"), values = saved.getJSONObject("values");
+        for (var names = fields.keys(); names.hasNext();) {
+            String key = names.next(); JSONObject field = fields.getJSONObject(key); Core.settings.remove(key);
+            if (field.getBoolean("present")) {
+                if (field.getBoolean("boolean")) Core.settings.put(key, Boolean.valueOf(field.getBoolean("value")));
+                else Core.settings.put(key, Integer.valueOf(field.getInt("value")));
+            }
+        }
+        for (KeyBind bind : KeyBind.all) if (values.has(bind.name)) {
+            JSONObject value = values.getJSONObject(bind.name);
+            bind.value = value.getInt("key") >= 0 ? new KeyBind.Axis(KeyCode.byOrdinal(value.getInt("key")))
+                : new KeyBind.Axis(KeyCode.byOrdinal(value.getInt("min")), KeyCode.byOrdinal(value.getInt("max")));
+        }
+        diagnostic(sameJson(captureBindings(), saved), "Original universal KeyBind values and exact Settings records restored", "typed fields retained; no unrelated configuration removed");
+    }
+
+    static boolean sameJson(Object a, Object b) throws Exception {
+        if (a instanceof JSONObject && b instanceof JSONObject) {
+            JSONObject left = (JSONObject)a, right = (JSONObject)b;
+            if (left.length() != right.length()) return false;
+            for (var names = left.keys(); names.hasNext();) {
+                String key = names.next();
+                if (!right.has(key) || !sameJson(left.get(key), right.get(key))) return false;
+            }
+            return true;
+        }
+        return a == null ? b == null : a.equals(b);
+    }
+
+    public static void keyCheckpoint(boolean save) throws Exception {
+        Fi checkpoint = output.parent().child("keybind-checkpoint.json");
+        if (save) { Core.settings.manualSave(); checkpoint.writeString(captureBindings().toString(), false, "UTF-8"); }
+        else {
+            JSONObject expected = new JSONObject(checkpoint.readString("UTF-8")), actual = captureBindings();
+            diagnostic(sameJson(actual, expected), "Fresh Android process loaded persisted universal KeyBind records", "same registry, values and typed Settings fields");
+        }
     }
 
     /** stageToScreenCoordinates has a top-left Y, matching Android MotionEvent. */
@@ -146,7 +260,7 @@ public final class BuildWheelAndroidProbe {
         } catch (Exception error) { throw new RuntimeException(error); }
     }
 
-    public static void finish() { completed = true; Core.settings.manualSave(); write("PASS_REAL_ANDROID_COMPONENTS", null); }
+    public static void finish() { completed = true; Core.settings.manualSave(); write(diagnosticFailures == 0 ? "PASS_REAL_ANDROID_COMPONENTS" : "ANDROID_KEYBIND_DIAGNOSTIC_FAILURE", diagnosticFailures == 0 ? null : diagnosticFailures + " key diagnostics failed; original settings restored/checkpoint recorded"); }
     public static void fail(String error) { completed = true; Log.err("BuildWheel Android probe: @", error); write("ANDROID_TEST_FAILURE", error); }
 
     static synchronized void write(String status, String error) {
@@ -156,7 +270,7 @@ public final class BuildWheelAndroidProbe {
                 .put("scope", "Real Android runtime, actual game/Arc/Rhino/UI/storage; synthetic View events, not Google Play Games")
                 .put("androidApi", android.os.Build.VERSION.SDK_INT).put("androidRelease", android.os.Build.VERSION.RELEASE)
                 .put("abis", new JSONArray(java.util.Arrays.asList(android.os.Build.SUPPORTED_ABIS)))
-                .put("checks", checks).put("screenshots", snapshots);
+                .put("checks", checks).put("screenshots", snapshots).put("keyDiagnostics", keyDiagnostics).put("inputTrace", inputTrace).put("keyDiagnosticFailures", diagnosticFailures);
             if (error != null) value.put("error", error);
             output.child("result.json").writeString(value.toString(2), false, "UTF-8");
         } catch (Throwable errorWriting) { errorWriting.printStackTrace(); }

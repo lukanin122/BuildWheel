@@ -135,7 +135,10 @@ def prepare(output: Path, supplied_jar: Path | None):
     shutil.copyfile(ROOT / "tests/platform/android-probe.java.template", launcher.parent / "BuildWheelAndroidProbe.java")
     asset_dir = source_dir / "android/assets"
     asset_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ROOT / "tests/platform/android-probe.js", asset_dir / "buildwheel-android-probe.js")
+    # Both files remain test assets, executed in the same real mod-scoped Rhino context.
+    (asset_dir / "buildwheel-android-probe.js").write_text(
+        (ROOT / "tests/platform/android-keybinds.js").read_text(encoding="utf-8") + "\n"
+        + (ROOT / "tests/platform/android-probe.js").read_text(encoding="utf-8"), encoding="utf-8")
 
     # AGP 8.2.2's documented Gradle baseline is 8.2. Keep this build-only tool
     # override explicit; no game/Arc runtime sources are changed by it.
@@ -229,7 +232,7 @@ def run(output: Path):
         started = time.monotonic()
         remote = APPFILES + f"/buildwheel-android-results/{stage}"
         result = None
-        while time.monotonic() - started < 260:
+        while time.monotonic() - started < 660:
             raw = adb("shell", "run-as", PACKAGE, "cat", remote + "/result.json", check=False)
             try:
                 candidate = json.loads(raw)

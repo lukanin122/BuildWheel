@@ -5,10 +5,10 @@
     var menu = require("menu"), libraryModule = require("wheel-library"), controls = menu.getControls();
     var AndroidKey = Packages.android.view.KeyEvent, Motion = Packages.android.view.MotionEvent;
     var originalProfile = Core.settings.getDataDirectory(), previousKeyboard = Core.settings.getBool("keyboard", false);
-    var frames = 0, next = 0, actions = [], editor = null, preview = null, beforeLibrary;
+    var frames = 0, next = 0, actions = [], editor = null, preview = null, beforeLibrary, keyTests;
     var desktop = Packages.mindustry.input.DesktopInput, mobile = Packages.mindustry.input.MobileInput;
     function check(value, message) { H.check(!!value, message); }
-    function step(action, delay) { actions.push({action: action, delay: delay == null ? 24 : delay}); }
+    function step(action, delay, ready) { actions.push({action: action, delay: delay == null ? 24 : delay, ready: ready}); }
     function find(name) { var e = Core.scene.root.find(name); check(e != null, "Actual Android widget exists: " + name); return e; }
     function click(name) { find(name).fireClick(); }
     function closeDialogs() { for (var i = 0; i < 12 && Core.scene.getDialog() != null; i++) Core.scene.getDialog().hide(); }
@@ -92,9 +92,13 @@
             check(String(originalProfile.child("buildwheel/library.json").readString("UTF-8")) === String(sentinel.readString("UTF-8")), "Actual Android process restart preserved library bytes");
         }
         beforeLibrary = String(originalProfile.child("buildwheel/library.json").readString("UTF-8"));
+        keyTests = buildWheelAndroidKeyDiagnostics({controls: controls, step: step, wheel: wheel, computer: computer,
+            closeDialogs: closeDialogs, click: click, getEditor: function() { return editor; }});
+        keyTests.baseline();
     } catch (error) { H.fail(String(error)); return; }
 
     step(function() { closeDialogs(); createWorld(); computer(false); check(!menu.computerInputActive(), "MobileInput disables BuildWheel computer actions"); });
+    keyTests.beforeBaseline();
     step(function() { chord(AndroidKey.KEYCODE_MINUS); });
     step(function() { check(Core.scene.getDialog() == null, "MobileInput chord did not open editor"); computer(true); });
     step(function() { check(menu.computerInputActive() && Vars.mobile, "DesktopInput switch enabled mod without changing Vars.mobile"); chord(AndroidKey.KEYCODE_MINUS); });
@@ -139,6 +143,9 @@
     step(function() {
         check(wheel() == null, "Android Escape closed wheel with unsupported relative settings");
         controls.set("relativeMouse", false); controls.set("clipOuter", false); controls.set("clipInner", false);
+    });
+    keyTests.schedule();
+    step(function() {
         Core.settings.put("keyboard", previousKeyboard); Core.settings.manualSave();
         check(String(originalProfile.child("buildwheel/library.json").readString("UTF-8")) === beforeLibrary, "Editor/input operations preserved unrelated library bytes");
         H.finish();
@@ -146,8 +153,11 @@
     Core.app.addListener(extend(Packages.arc.ApplicationListener, {
         update: function() {
             if (H.done() || ++frames < next || actions.length === 0) return;
-            var current = actions.shift(); next = frames + current.delay;
-            try { current.action(); } catch (error) { H.fail(String(error)); }
+            var current = actions[0];
+            try {
+                if (current.ready && !current.ready()) return;
+                actions.shift(); next = frames + current.delay; current.action();
+            } catch (error) { H.fail(String(error)); }
         }
     }));
 })();
