@@ -20,7 +20,6 @@ Events.on(ClientLoadEvent, () => {
         var handler = Vars.control == null ? null : Vars.control.input;
         if (handler !== androidHandler) {
             androidHandler = handler; closeWheel(); resetCapturedInput(); // Переназначенное управление не наследует старый жест или отложенный выбор.
-            if (androidCtrlBridge != null) androidCtrlBridge.release(handler); // Отпускаем модификаторы прежнего обработчика, сохраняя уже полученное нажатие нового.
             if (!(handler instanceof DesktopInput) && settingsMenu != null) settingsMenu.inputDisabled(); // Закрываем только собственные окна при возвращении к сенсорному управлению.
         }
         return handler instanceof DesktopInput;
