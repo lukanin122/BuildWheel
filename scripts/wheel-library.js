@@ -12,8 +12,8 @@ exports.create = function() { // Читаем библиотеку при пер
     var entries = []; // В памяти находятся только обычные данные, без виджетов, текстур и обработчиков кадров.
     var nextId = 1; // Счётчик обеспечивает постоянный номер сохранения независимо от его имени и положения в списке.
     var loaded = false, committedText = null, mainFile = null, backupFile = null, temporaryFile = null; // Последний подтверждённый JSON нужен для резервной копии перед следующей записью.
-    var files = java.nio.file.Files, charset = java.nio.charset.StandardCharsets.UTF_8; // UTF-8 в отдельном файле не ограничен пределом writeUTF настроек игры.
-    var moveOptions = [java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING]; // Без атомарной замены отказываемся от записи, сохраняя прежнюю библиотеку.
+    var android = OS.isAndroid, files = null, moveOptions = null, androidOs = null, androidErrors = null, decoderFactory = null; // Файловый API выбираем при первом обращении к библиотеке, отдельно от режима управления.
+    var charset = java.nio.charset.Charset.forName("UTF-8"); // UTF-8 в отдельном файле не ограничен пределом writeUTF настроек игры.
 
     // ПРОВЕРКА ТИПА И КОПИРОВАНИЕ ДАННЫХ
     function validType(type) { // Не допускаем появления случайных типов вкладок в библиотеке.
@@ -35,6 +35,33 @@ exports.create = function() { // Читаем библиотеку при пер
         return -1; // Отсутствие записи обозначаем отрицательной позицией.
     }
 
+    // ФАЙЛОВЫЙ API НАСТОЛЬНОЙ СИСТЕМЫ И ANDROID
+    function prepareStorage() { // Android до API 26 не содержит java.nio.file, а Files.readString появился ещё позднее.
+        if (android) {
+            androidOs = Packages.android.system.Os; androidErrors = Packages.android.system.OsConstants; // Публичные stat и rename доступны с Android API 21.
+            decoderFactory = java.lang.Class.forName("java.nio.charset.Charset").getMethod("newDecoder", []); // Вызываем публичный Charset, не закрытый класс его реализации.
+        }
+        else { files = java.nio.file.Files; moveOptions = [java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING]; } // Без атомарной замены отказываемся от записи, сохраняя прежнюю библиотеку.
+    }
+
+    function storagePath(file) { // На Android оставляем обычный File, не вызывая отсутствующий File.toPath.
+        return android ? file : file.toPath();
+    }
+
+    function missing(path) { // Отсутствие файла отличаем от отказа доступа: только первое позволяет создать новую библиотеку.
+        if (!android) return files.notExists(path);
+        try { androidOs.stat(path.getAbsolutePath()); return false; } catch (error) {
+            var nativeError = error.javaException || (error instanceof java.lang.Throwable ? error : null);
+            if (nativeError instanceof Packages.android.system.ErrnoException && Number(nativeError.errno) === Number(androidErrors.ENOENT)) return true; // ENOTDIR, EACCES и прочие ошибки не считаем отсутствием сохранений.
+            throw error;
+        }
+    }
+
+    function replace(source, target) { // Оба файла находятся в одном каталоге; копирование с удалением вместо атомарной замены запрещено.
+        if (android) androidOs.rename(source.getAbsolutePath(), target.getAbsolutePath()); // Публичный POSIX rename заменяет файл одним действием или сообщает ошибку.
+        else files.move(source, target, moveOptions);
+    }
+
     // ПРОВЕРКА ФАЙЛА И ПЕРЕНОС СТАРЫХ СОХРАНЕНИЙ
     function decode(text) { // Не превращаем повреждённую библиотеку в пустую, которую можно случайно записать поверх неё.
         var saved = JSON.parse(text), ids = Object.create(null);
@@ -50,18 +77,27 @@ exports.create = function() { // Читаем библиотеку при пер
     }
 
     function read(path) { // Повреждённые байты UTF-8 должны вызвать восстановление, а не незаметно заменить буквы символом �.
-        return String(files.readString(path, charset)); // Публичный Files.readString проверяет кодировку, не обращаясь из Rhino к закрытым классам JDK.
+        if (!android) return String(files.readString(path, charset)); // Публичный Files.readString проверяет кодировку, не обращаясь из Rhino к закрытым классам JDK.
+        var decoder = decoderFactory.invoke(charset, []).onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT); // Одинаково строго проверяем UTF-8 и на Android.
+        var buffer = java.lang.reflect.Array.newInstance(java.lang.Character.TYPE, 4096), text = new java.lang.StringBuilder(), count = 0; // Один буфер обслуживает всё чтение файла.
+        var stream = new java.io.FileInputStream(path), reader = null;
+        try {
+            reader = new java.io.InputStreamReader(stream, decoder); // Этот конструктор не требует новых Android API.
+            while ((count = reader.read(buffer, 0, buffer.length)) !== -1) text.append(buffer, 0, count); // Читаем порциями без отдельного Java-вызова на каждый символ.
+        } finally { if (reader != null) reader.close(); else stream.close(); } // Поток закрываем и при ошибке декодирования или создания reader.
+        return String(text.toString()); // Возврат после finally обходит ошибку генерации байткода в используемом Rhino.
     }
 
     function ensureLoaded() { // Повторные list/get используют память; закрытая библиотека не выполняет файловый ввод.
         if (loaded) return;
         try {
+            prepareStorage(); // Настольные классы NIO на Android не загружаются, даже при первом открытии браузера.
             var directory = Core.settings.getDataDirectory().child("buildwheel");
-            mainFile = directory.child("library.json").file().toPath(); backupFile = directory.child("library.json.bak").file().toPath(); temporaryFile = directory.child("library.json.tmp").file().toPath();
+            mainFile = storagePath(directory.child("library.json").file()); backupFile = storagePath(directory.child("library.json.bak").file()); temporaryFile = storagePath(directory.child("library.json.tmp").file());
             var saved = null, text = null, failure = null, present = false;
             var candidates = [mainFile, backupFile]; // Резервная копия используется только при отсутствии или повреждении основного файла.
             for (var i = 0; i < candidates.length && saved == null; i++) {
-                if (files.notExists(candidates[i])) continue; // Ошибку доступа не принимаем за отсутствие файла: она должна запретить перезапись пустым списком.
+                if (missing(candidates[i])) continue; // Ошибку доступа не принимаем за отсутствие файла: она должна запретить перезапись пустым списком.
                 present = true;
                 try { text = read(candidates[i]); saved = decode(text); } catch (error) {
                     var nativeError = error.javaException || (error instanceof java.lang.Throwable ? error : null); // Повреждённую кодировку отличаем от отказа доступа или другой ошибки диска.
@@ -85,7 +121,7 @@ exports.create = function() { // Читаем библиотеку при пер
 
     // АТОМАРНАЯ ЗАПИСЬ И РЕЗЕРВНАЯ КОПИЯ
     function writeConfirmed(path, text) { // Синхронизируем временный файл до того, как он сможет заменить рабочую библиотеку.
-        var stream = new java.io.FileOutputStream(path.toFile());
+        var stream = new java.io.FileOutputStream(android ? path : path.toFile());
         try { stream.write(new java.lang.String(text).getBytes(charset)); stream.getFD().sync(); } finally { stream.close(); }
         if (read(path) !== text) throw new Error(Core.bundle.get("buildwheel.error.library-format")); // Проверяем полный текст до атомарного переименования.
     }
@@ -93,9 +129,10 @@ exports.create = function() { // Читаем библиотеку при пер
     function save() { // Вызываем запись только после добавления, переименования или удаления сохранения.
         try {
             var text = JSON.stringify({version: 1, nextId: nextId, entries: entries}); // Версия позволяет в дальнейшем отличить другой формат данных.
-            files.createDirectories(mainFile.getParent());
-            if (committedText != null) { writeConfirmed(temporaryFile, committedText); files.move(temporaryFile, backupFile, moveOptions); } // Сбой здесь не изменяет основной файл и прежнюю библиотеку в памяти.
-            writeConfirmed(temporaryFile, text); files.move(temporaryFile, mainFile, moveOptions); // После синхронизации заменяем файл одним атомарным действием.
+            if (android) { var parent = mainFile.getParentFile(); if (!parent.mkdirs() && !parent.isDirectory()) throw new java.io.IOException(String(parent)); } // Не продолжаем запись, если каталог создать не удалось.
+            else files.createDirectories(mainFile.getParent());
+            if (committedText != null) { writeConfirmed(temporaryFile, committedText); replace(temporaryFile, backupFile); } // Сбой здесь не изменяет основной файл и прежнюю библиотеку в памяти.
+            writeConfirmed(temporaryFile, text); replace(temporaryFile, mainFile); // После синхронизации заменяем файл одним атомарным действием.
             committedText = text; // Ни одна операция, способная сорвать запись, после подтверждения не выполняется.
         } catch (error) { throw new Error(Core.bundle.format("buildwheel.error.library-write", String(error))); }
     }
