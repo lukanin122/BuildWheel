@@ -183,7 +183,9 @@ def run(output: Path):
     adb("shell", "pm", "clear", PACKAGE)  # This is the newly installed disposable AVD app only.
     # Ask Context.getExternalFilesDir to create the package root. ADB mkdir at
     # Android/data is forbidden on API30 even when shell can access existing files.
-    adb("shell", "am", "start", "-W", "-n", PACKAGE + "/mindustry.android.AndroidLauncher",
+    # Bootstrap finishes in onCreate, so it has no rendered window to wait for (-W).
+    # Its own private JSON receipt remains the required success condition below.
+    adb("shell", "am", "start", "-n", PACKAGE + "/mindustry.android.AndroidLauncher",
         "--es", "buildwheel.probe.stage", "bootstrap")
     bootstrap = None
     for attempt in range(30):

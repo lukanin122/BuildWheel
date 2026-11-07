@@ -53,6 +53,7 @@ public final class BuildWheelAndroidProbe {
         if ("bootstrap".equals(stage)) {
             launcher.getExternalFilesDir(null); // The app creates its external package directory through the supported Context API.
             write("BOOTSTRAP_EXTERNAL_DIRECTORY_READY", null);
+            launcher.finish(); // Finishing inside onCreate skips Arc onResume/onPause, whose input/graphics were deliberately not initialized.
             return; // Host installs verified mod bytes after the app created its package directory.
         }
         activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE); // Test the requested computer window, not the device's natural portrait orientation.
