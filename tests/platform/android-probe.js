@@ -127,7 +127,14 @@
     step(function() { check(wheel() == null && Vars.control.input.block === Blocks.conveyor, "Android LMB selected conveyor and closed wheel"); chord(AndroidKey.KEYCODE_1); });
     step(function() { check(wheel() != null, "Android wheel reopened"); computer(false); });
     step(function() { check(!menu.computerInputActive() && wheel() == null, "Runtime switch to MobileInput closed wheel safely"); chord(AndroidKey.KEYCODE_1); });
-    step(function() { check(wheel() == null, "MobileInput did not intercept wheel chord"); computer(true); controls.set("relativeMouse", true); controls.set("clipOuter", true); controls.set("clipInner", true); chord(AndroidKey.KEYCODE_1); });
+    step(function() { check(wheel() == null, "MobileInput did not intercept wheel chord"); computer(true); key(AndroidKey.KEYCODE_CTRL_LEFT, true); });
+    step(function() { computer(false); tap(AndroidKey.KEYCODE_1); }); // Detect handler change inside the actual fixed-length Android key queue.
+    step(function() { key(AndroidKey.KEYCODE_CTRL_LEFT, false); });
+    step(function() { computer(true); tap(AndroidKey.KEYCODE_1); });
+    step(function() {
+        check(!Core.input.ctrl() && wheel() == null, "Mode change during input drain did not strand Ctrl or create a phantom wheel chord");
+        controls.set("relativeMouse", true); controls.set("clipOuter", true); controls.set("clipInner", true); chord(AndroidKey.KEYCODE_1);
+    });
     step(function() { check(wheel() != null, "Unsupported Android relative settings preserve absolute wheel opening"); tap(AndroidKey.KEYCODE_ESCAPE); });
     step(function() {
         check(wheel() == null, "Android Escape closed wheel with unsupported relative settings");

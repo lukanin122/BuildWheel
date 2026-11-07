@@ -1,11 +1,11 @@
 {
-  "source_commit": "65eafae640df971cfd71647d51b35882e46ddaa0",
+  "source_commit": "5d5d4168e4a2103a38e0f41f51a857f13797a397",
   "files": {
     "bundles/bundle.properties": "cdae16fc0c25776032ad6c5811dd2742e691d650d1e0410daa9ec09dc8cb8d71",
     "bundles/bundle_ru.properties": "987bfd2a1d3a5007ec7f102694fe8cd4e22a9fe3d2c0bff467d2204b109b665b",
     "mod.hjson": "2d121364fa8bc6901d00dd3ffb2dcc08073e33baedc7780a277073874f3a0877",
     "scripts/appearance-menu.js": "71cdbc3e8460b7fb9d90a0d956bf9488301bf3550c88d26f36cd9c18d2caa648",
-    "scripts/main.js": "f2839185cca13b5e939f7e2d7650db15fe05c4e9e1932a80a24da7d272f7d6e8",
+    "scripts/main.js": "91d59b4aeb3d6571afa779c9cb3e646a1ff3cda0f3aa728c947b11f26805f4cc",
     "scripts/menu.js": "a0ada86c22ff57803341a4463073068f907dde33a2f38848518518499949f0fb",
     "scripts/palette.js": "c2d2d1d277ff4ca7b21fad58fed60c312f1090889418191e91522d26a4fb3a85",
     "scripts/sdl-relative.js": "079c4153c27bb6f251307ad1e5d525196f45722c6b48b5ac4c95dc9adb59f6b9",
