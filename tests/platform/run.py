@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Actual target-OS CI orchestration. Test data and native diagnostics live outside the checkout."""
-import argparse, hashlib, json, os, pathlib, platform, re, shutil, signal, subprocess, sys, time, urllib.request, zipfile
+import argparse, hashlib, json, os, pathlib, platform, re, shutil, signal, subprocess, sys, tarfile, time, urllib.request, zipfile
 
 JAR_URL = "https://github.com/Anuken/Mindustry/releases/download/v160.7/Mindustry.jar"
 JAR_SHA = "36d94941a1639478ad1d9be25a9d802c6f77552f400c6da0338b7b019f63a0d1"
@@ -195,16 +195,17 @@ def inject(env, proc, case, mode, wayland=False):
         with logfile.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"injectionError": str(exc)}) + "\n")
 
-def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=False, raw_sdl=False):
+def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=False, raw_sdl=False, fixture_sdl=None):
     case = OUT / name
     case.mkdir(exist_ok=True)
     env = environment(case)
     env.update({k: v for k, v in base_env.items() if k in {"DISPLAY","LIBGL_ALWAYS_SOFTWARE","GALLIUM_DRIVER","XDG_RUNTIME_DIR","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER"}})
     if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
+    if fixture_sdl: env["LD_LIBRARY_PATH"] = str(fixture_sdl) + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     flags = ["-DSDL2_STATIC=1"] if system_sdl else []
     if raw_sdl: flags.append("-Dbuildwheel.probe.raw-sdl=true")
     command = java_command("NativeProbe", case, JAR, ROOT, case, scenario, "3", extra_flags=flags)
-    save(case / "launch.json", {"command": command, "environment": {k: env.get(k) for k in ["DISPLAY","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER","XDG_RUNTIME_DIR"]}, "systemSDL": system_sdl})
+    save(case / "launch.json", {"command": command, "environment": {k: env.get(k) for k in ["DISPLAY","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER","XDG_RUNTIME_DIR","LD_LIBRARY_PATH"]}, "systemSDL": system_sdl, "faultInjectedSDL":bool(fixture_sdl)})
     started = time.monotonic()
     with (case / "process.log").open("w", encoding="utf-8") as log:
         p = subprocess.Popen(command, cwd=case, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -233,6 +234,33 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
     if IS_LINUX:
         capture(["xprop", "-root", "_NET_ACTIVE_WINDOW"], case / "x-focus-after.log", base_env, timeout=5)
 
+def no_xinput_fixture():
+    """A real SDL build that must auto-fallback. No SDL private fields or fake FFM results."""
+    fixture = OUT / "sdl-no-xinput"
+    fixture.mkdir(exist_ok=True)
+    archive = fixture / "SDL2-2.0.10.tar.gz"
+    url = "https://www.libsdl.org/release/SDL2-2.0.10.tar.gz"
+    expected = "b4656c13a1f0d0023ae2f4a9cf08ec92fffb464e0f24238337784159b8b91d57"
+    urllib.request.urlretrieve(url, archive)
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != expected: raise RuntimeError("SDL fixture source hash mismatch")
+    with tarfile.open(archive) as source:
+        source.extractall(fixture, filter="data")
+    source = fixture / "SDL2-2.0.10"
+    install = fixture / "installed"
+    configure = [str(source / "configure"), "--prefix=" + str(install), "--enable-shared", "--disable-static", "--enable-video-x11", "--disable-video-x11-xinput", "--disable-video-wayland"]
+    for name, command in [("configure", configure), ("make", ["make", "-j2"]), ("install", ["make", "install"])]:
+        execution = capture(command, fixture / (name + ".log"), cwd=source, timeout=240)
+        if execution["exit"] != 0: raise RuntimeError("No-XInput SDL fixture build failed: " + name)
+    configuration = (source / "include/SDL_config.h").read_text()
+    if re.search(r"^#define SDL_VIDEO_DRIVER_X11_XINPUT2\s+1", configuration, re.M): raise RuntimeError("Negative SDL fixture unexpectedly enables XInput2")
+    for feature in ["SDL_VIDEO_DRIVER_X11", "SDL_VIDEO_OPENGL"]:
+        if not re.search(r"^#define " + feature + r"\s+1", configuration, re.M): raise RuntimeError("SDL fixture lacks " + feature)
+    shutil.copy2(source / "include/SDL_config.h", fixture / "verified-SDL_config.h")
+    library = install / "lib/libSDL2-2.0.so.0"
+    capture(["ldd",str(library)], fixture / "ldd.log")
+    save(fixture / "provenance.json", {"url":url,"sourceSha256":expected,"configure":configure,"librarySha256":hashlib.sha256(library.read_bytes()).hexdigest(),"scope":"Fault-injected real SDL build ONLY, not the shipping native library"})
+    return library.parent
+
 def game_smoke(name, base_env, wayland=False, system_sdl=False):
     case = OUT / name
     profile = case / "profile"
@@ -255,10 +283,12 @@ def game_smoke(name, base_env, wayland=False, system_sdl=False):
 
 def startup_tests():
     for scenario, locale in [("factory","en"),("factory","ru"),("relative-saved","en"),
+                             ("user-settings","en"),("user-settings-restart","en"),
                              ("malformed-block","en"),("malformed-block-restart","en"),
-                             ("malformed-scale","en"),("malformed-scale-restart","en")]:
+                             ("malformed-scale","en"),("malformed-scale-restart","en"),
+                             ("malformed-mixed","en"),("malformed-mixed-restart","en")]:
         name = "startup-" + scenario + "-" + locale
-        data_name = scenario.replace("-restart", "") if "malformed" in scenario else scenario + "-" + locale
+        data_name = scenario.replace("-restart", "") + "-" + locale
         data = OUT / ("startup-data-" + data_name)
         data.mkdir(exist_ok=True)
         env = environment(data)
@@ -276,7 +306,7 @@ def setup():
     observed = {}
     for rel, sha in lock["files"].items():
         digest = hashlib.sha256((ROOT / rel).read_bytes()).hexdigest()
-        if digest != sha: raise RuntimeError("Production source differs from locked main: " + rel)
+        if digest != sha: raise RuntimeError("Production source differs from locked test revision: " + rel)
         observed[rel] = digest
     save(OUT / "verified-production-hashes.json", observed)
     if not JAR.exists() or hashlib.sha256(JAR.read_bytes()).hexdigest() != JAR_SHA:
@@ -305,8 +335,8 @@ def summarize():
     for r in RESULTS:
         lines.append("| " + r["test"] + " | " + r["group"] + " | " + str(r["classification"]) + " |")
     lines += ["", "A successful GitHub job is not whole-platform certification. Zero received deltas are inconclusive.",
-              "Expected malformed-settings failures and forced-warp policy defects are retained as findings; they are not fixed here.",
-              "Only the test branch contains this infrastructure. Production files are SHA-256 checked against main.", ""]
+              "Malformed settings must now recover; forced/automatic warp must be rejected. Failures are never ignored.",
+              "Only the test branch contains these fixes and infrastructure. Production hashes are pinned to the reviewed runtime revision.", ""]
     text = "\n".join(lines)
     (OUT / "SUMMARY.md").write_text(text, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -322,6 +352,8 @@ try:
         native_case("native-forced-warp", graphics, "forced-warp")
         if IS_LINUX:
             native_case("native-x11-system-sdl", graphics, system_sdl=True)
+            fixture = no_xinput_fixture()
+            native_case("native-x11-automatic-warp", graphics, "automatic-warp", system_sdl=True, fixture_sdl=fixture)
             wayland = nested_wayland(graphics)
             if wayland is None:
                 record("native-wayland", "REAL_NATIVE_COMPONENT", {"exit":2}, {"classification":"INFRASTRUCTURE_WESTON_UNAVAILABLE"})
@@ -347,8 +379,13 @@ finally:
         except OSError: pass
         logfile.close()
     summarize()
-# Preserve all results. A red job flags unanticipated infrastructure/crash/normal-case defects;
-# known deliberately injected invalid-settings/forced-warp cases remain visible in the summary.
+# Preserve all results, including known native-Wayland Arc/GLEW failures.
+# Invalid-settings and fallback regressions are mandatory checks, with no name-based exclusions.
 bad = any((r["execution"].get("exit",0) != 0 or str(r["classification"]).startswith(("INFRASTRUCTURE","UNEXPECTED_FAILURE","CONFIRMED_COMPONENT_DEFECT")))
-          and "forced-warp" not in r["test"] and "malformed" not in r["test"] for r in RESULTS)
+          for r in RESULTS)
+for r in RESULTS:
+    if r["group"] == "REAL_JVM_MOCK_GRAPHICS_STARTUP" and not str(r["classification"]).startswith("PASS_"): bad = True
+    if r["test"] == "native-forced-warp" and r["classification"] != "SAFE_REFUSAL_WARP_POLICY": bad = True
+    if r["test"] == "native-x11-automatic-warp" and r["classification"] != "SAFE_REFUSAL_XINPUT2_UNAVAILABLE": bad = True
+    if r["test"] == "native-normal" and r["classification"] not in {"COMPONENT_LIFECYCLE_EXECUTED","COMPONENT_EXECUTED_WITH_ENVIRONMENT_LIMITATIONS"}: bad = True
 sys.exit(1 if bad else 0)

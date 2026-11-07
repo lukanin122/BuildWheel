@@ -27,7 +27,7 @@ import java.util.zip.ZipFile;
  * the SDL image whose current GL window matches the window just created by this application.
  * A successful component result is not a complete game/platform certification.
  */
-public final class NativeProbe implements ApplicationListener {
+public class NativeProbe implements ApplicationListener {
     static Path jar, mod, data;
     static Context cx;
     static Scriptable scope, module;
@@ -54,7 +54,7 @@ public final class NativeProbe implements ApplicationListener {
         if(args.length<3 || args.length>5) throw new IllegalArgumentException("NativeProbe <v160.7.jar> <mod-snapshot> <isolated-output> [normal|forced-warp|backend-only] [motion-seconds=4]");
         jar=Path.of(args[0]).toAbsolutePath();mod=Path.of(args[1]).toAbsolutePath();data=Path.of(args[2]).toAbsolutePath();
         if(args.length>3) scenario=args[3];
-        if(!scenario.equals("normal") && !scenario.equals("forced-warp") && !scenario.equals("backend-only")) throw new IllegalArgumentException("Unknown scenario: "+scenario);
+        if(!Set.of("normal","forced-warp","automatic-warp","backend-only").contains(scenario)) throw new IllegalArgumentException("Unknown scenario: "+scenario);
         if(args.length>4) motionSeconds=Double.parseDouble(args[4]);
         if(!(motionSeconds>=0.5 && motionSeconds<=15)) throw new IllegalArgumentException("motion-seconds must be 0.5..15");
         Files.createDirectories(data);
@@ -210,7 +210,13 @@ public final class NativeProbe implements ApplicationListener {
                         adapter=(Scriptable)call(module,"create");
                         report.put("adapterAvailable",prop(adapter,"available"));report.put("adapterReason",prop(adapter,"reason"));
                         event("adapter-created",state());
-                        if(!Boolean.TRUE.equals(prop(adapter,"available"))) {report.put("classification","SAFE_REFUSAL_ADAPTER_UNAVAILABLE");finish();return;}
+                        if(scenario.equals("automatic-warp")) { automaticFallback(); return; }
+                        if(!Boolean.TRUE.equals(prop(adapter,"available"))) {
+                            boolean began=Boolean.TRUE.equals(call(adapter,"begin"));
+                            check("unverified-provider-never-captures",!began && mode()==0 && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",state());
+                            absoluteWarp();
+                            report.put("classification","SAFE_REFUSAL_ADAPTER_UNAVAILABLE");finish();return;
+                        }
                         absoluteWarp();setPhase("after-warp");
                     }
                     break;
@@ -294,6 +300,25 @@ public final class NativeProbe implements ApplicationListener {
         else check("absolute-warp",moved,"SAFE_REFUSAL_FOCUS_OR_NATIVE",state());
     }
 
+    void automaticFallback() throws Throwable {
+        // This scenario uses a separately built, real SDL2.0.10 with XInput2
+        // compiled out. It does not inject fake SDL return values or modify SDL internals.
+        check("automatic-warp-not-forced-by-hint",Integer.valueOf(0).equals(report.get("forcedWarpHintRead")),"CONFIRMED_COMPONENT_DEFECT",state());
+        boolean began=Boolean.TRUE.equals(call(adapter,"begin"));
+        if(began)probeOwnsMode=true;
+        check("automatic-warp-rejected-before-capture",!began && !Boolean.TRUE.equals(prop(adapter,"available")) && !Boolean.TRUE.equals(prop(adapter,"active")) && mode()==0,"CONFIRMED_COMPONENT_DEFECT",state());
+        if(began){call(adapter,"end");probeOwnsMode=mode()!=0;}
+        // Independently demonstrate why SDL success + mode flag is insufficient.
+        int returned=((Number)invoke("set",1)).intValue(), after=mode();probeOwnsMode=after!=0;
+        report.put("directAutomaticFallback",Map.of("setterReturn",returned,"mode",after,"hint",report.get("forcedWarpHintRead"),"SDL_error",String.valueOf(SDL.SDL_GetError())));
+        check("fixture-SDL-accepts-automatic-fallback",returned==0 && after==1,"INFRASTRUCTURE_AUTOMATIC_WARP_FIXTURE_INVALID",state());
+        cleanupProbeMode();
+        check("automatic-fallback-probe-released",mode()==0,"CONFIRMED_COMPONENT_DEFECT",state());
+        absoluteWarp();
+        check("ordinary-warp-retained-without-XInput2",Boolean.TRUE.equals(report.get("absoluteWarpReturned")),"CONFIRMED_COMPONENT_DEFECT",state());
+        report.put("classification",hasDefect()?"CONFIRMED_COMPONENT_DEFECT":returned!=0 || after!=1?"INFRASTRUCTURE_AUTOMATIC_WARP_FIXTURE_INVALID":"SAFE_REFUSAL_XINPUT2_UNAVAILABLE");finish();
+    }
+
     void foreignMode() throws Throwable {
         if(mode()!=0)throw new IllegalStateException("Unexpected pre-existing mode before foreign-ownership test");
         int enabled=((Number)invoke("set",1)).intValue();
@@ -320,14 +345,15 @@ public final class NativeProbe implements ApplicationListener {
         if(began)probeOwnsMode=true;
         report.put("begin"+cycle,Map.of("return",began,"mode",after,"reason",String.valueOf(prop(adapter,"reason")),"SDL_error",String.valueOf(SDL.SDL_GetError())));
         if(scenario.equals("forced-warp")) {
-            boolean rejected=!began;
+            boolean rejected=!began && after==0 && Integer.valueOf(1).equals(report.get("forcedWarpHintRead"));
+            if(System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("linux")) rejected=rejected && String.valueOf(prop(adapter,"reason")).contains(Core.bundle.get("buildwheel.sdl.warp-rejected")); // Linux must reach the new policy check, not merely lose focus.
             check("forced-warp-rejected",rejected,"CONFIRMED_COMPONENT_DEFECT",state());
             report.put("forcedWarpClassification",rejected?"SAFE_REFUSAL_WARP_POLICY":"POLICY_DEFECT_FORCED_WARP_ACCEPTED");
         }
         if(!began) {
-            check("begin-cycle-"+cycle,false,"SAFE_REFUSAL_FOCUS_OR_NATIVE",state());
+            if(!scenario.equals("forced-warp")) check("begin-cycle-"+cycle,false,"SAFE_REFUSAL_FOCUS_OR_NATIVE",state());
             check("failed-begin-releases-mode",after==0,"CONFIRMED_COMPONENT_DEFECT",state());
-            report.put("classification",hasDefect()?"CONFIRMED_COMPONENT_DEFECT":"SAFE_REFUSAL_BEGIN_FOCUS_OR_NATIVE");finish();return;
+            report.put("classification",hasDefect()?"CONFIRMED_COMPONENT_DEFECT":scenario.equals("forced-warp")?"SAFE_REFUSAL_WARP_POLICY":"SAFE_REFUSAL_BEGIN_FOCUS_OR_NATIVE");finish();return;
         }
         check("begin-cycle-"+cycle,after==1 && Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",state());
         setPhase("sampling");

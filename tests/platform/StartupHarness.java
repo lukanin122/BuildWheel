@@ -99,6 +99,15 @@ public final class StartupHarness {
         assertions++;
         if (!value) throw new AssertionError(message);
     }
+    public static void assertSettingEquals(String key, Object expected, String stage) {
+        // Keep both boxed values inside Java: a JS call to Integer.equals(...)
+        // can otherwise convert the fetched Integer to a Java Double argument.
+        Object actual = Core.settings.get(key, null);
+        String expectedType = expected == null ? "null" : expected.getClass().getName();
+        String actualType = actual == null ? "null" : actual.getClass().getName();
+        assertTrue(Objects.equals(expected, actual), stage + ": raw typed value preserved: " + key
+            + " expected=" + expected + " (" + expectedType + ") actual=" + actual + " (" + actualType + ")");
+    }
     public static void log(Object value) { System.out.println(String.valueOf(value)); }
     public static void pointer(int x, int y) { ((Input) Core.input).x = x; ((Input) Core.input).y = y; }
     public static void drain() { ((App) Core.app).drain(); }
