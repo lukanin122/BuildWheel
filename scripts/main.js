@@ -13,6 +13,18 @@ var relativeModule = require("sdl-relative"); // Подключаем файл, 
 // когда клиентский интерфейс уже создан.
 Events.on(ClientLoadEvent, () => {
     var controls = menuModule.getControls(); // Загружаем общие настройки до создания интерфейса и обработчиков ввода.
+    var androidCtrlBridge = null; // На Android обработчик сырых Ctrl остаётся пассивным после DisposeEvent.
+    var androidHandler = OS.isAndroid && Vars.control != null ? Vars.control.input : null; // Смену обработчика замечаем при событиях ввода и обновлении открытого колеса.
+    function computerInputActive() { // Настольные платформы сохраняют прежний путь без проверки класса InputHandler.
+        if (!OS.isAndroid) return true;
+        var handler = Vars.control == null ? null : Vars.control.input;
+        if (handler !== androidHandler) {
+            androidHandler = handler; closeWheel(); resetCapturedInput(); // Переназначенное управление не наследует старый жест или отложенный выбор.
+            if (androidCtrlBridge != null) androidCtrlBridge.release(handler); // Отпускаем модификаторы прежнего обработчика, сохраняя уже полученное нажатие нового.
+            if (!(handler instanceof DesktopInput) && settingsMenu != null) settingsMenu.inputDisabled(); // Закрываем только собственные окна при возвращении к сенсорному управлению.
+        }
+        return handler instanceof DesktopInput;
+    }
     var windowFocused = true; // События pause/resume не дают отложенному вводу перемещать мышь после переключения в другое приложение.
     var wheelOpen = false; // wheelOpen отвечает за показ и отрисовку колеса
     var activeWheelNumber = -1; // Номер последнего открытого колеса 0-9, дефолт -1
@@ -62,7 +74,7 @@ Events.on(ClientLoadEvent, () => {
         else Core.input.removeProcessor(motionProcessor);
     }
 
-    function wantsRelative() { return !!(controls.clipOuter || controls.clipInner || controls.relativeMouse); } // Без ограничителей и отдельного разрешения используется обычный системный курсор.
+    function wantsRelative() { return !OS.isAndroid && !!(controls.clipOuter || controls.clipInner || controls.relativeMouse); } // Android использует обычную мышь; сохранённые SDL-настройки не удаляются и не вызывают FFM.
 
     function prepareRelative() { if (relative == null) relative = relativeModule.create(); return relative; } // Ранний require сохраняется, но обычный Windows-ввод не разбирает DLL.
 
@@ -74,7 +86,7 @@ Events.on(ClientLoadEvent, () => {
 
     function wheelFrame() { // Лёгкая проверка работает только у открытого колеса; нативный ввод читается только в relative mode.
         if (!wheelOpen) return;
-        if (!windowFocused || !Vars.state.isGame() || wheelInputBlocked() || wantsRelative() != requestedRelative) { closeWheel(); return; } // Смена способа ввода завершает текущий захват, следующее открытие использует новые настройки.
+        if (!computerInputActive() || !windowFocused || !Vars.state.isGame() || wheelInputBlocked() || wantsRelative() != requestedRelative) { closeWheel(); return; } // Смена способа ввода завершает текущий захват, следующее открытие использует новые настройки.
         if (!virtualActive) return;
         if (!controls.customArrow && !prepareStandardCursor()) { closeWheel(); return; }
         sampleRelative();
@@ -191,7 +203,7 @@ Events.on(ClientLoadEvent, () => {
         // Это сообщает сцене, что курсор над UI, и блокирует игровое наведение.
         // x/y здесь локальные; выбор сектора отдельно получает координаты сцены.
         hit: function(x, y, touchable) {
-            if (!wheelOpen || !Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return null;
+            if (!menuModule.computerInputActive() || !wheelOpen || !Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return null;
             if (touchable && this.touchable != Touchable.enabled) return null;
             return this;
         }
@@ -279,6 +291,7 @@ Events.on(ClientLoadEvent, () => {
         return false; // Неподдерживаемая платформа сохраняет обычное наведение.
     }
     Events.on(DisposeEvent, () => { // Освобождаем нативные ресурсы один раз при завершении игры.
+        if (androidCtrlBridge != null) androidCtrlBridge.dispose(); // AndroidInput не имеет removeKeyListener; отключаем только собственный небольшой слушатель.
         closeWheel(); // Сначала снимаем ограничение ОС и возвращаем обычный курсор.
         if (invisibleCursor != null) { invisibleCursor.dispose(); invisibleCursor = null; } // Повторное событие не должно освобождать тот же аппаратный курсор дважды.
         if (standardCursorTexture != null) { standardCursorTexture.dispose(); standardCursorTexture = null; standardCursorRegion = null; } // Освобождаем только собственную текстуру, а не курсоры Mindustry.
@@ -303,7 +316,7 @@ Events.on(ClientLoadEvent, () => {
 
     // РАЗОВОЕ РАЗМЕЩЕНИЕ КОЛЕСА И КУРСОРА ПРИ ОТКРЫТИИ
     function positionWheel() { // mousePosition содержит текущую видимую позицию мыши в координатах сцены.
-        var originalX = mousePosition.x, originalY = mousePosition.y, margin = wheel.getWidth() / 2 * controls.edgeShift; // При нуле сдвига нет, при единице отступ от каждого края равен радиусу.
+        var originalX = mousePosition.x, originalY = mousePosition.y, margin = OS.isAndroid ? 0 : wheel.getWidth() / 2 * controls.edgeShift; // Android не переносит физический указатель через неподдерживаемый SDL/FFM; на настольных ОС доля отступа сохраняется.
         if (margin > 0) {
             mousePosition.x = Core.scene.getWidth() < margin * 2 ? Core.scene.getWidth() / 2 : Math.max(margin, Math.min(Core.scene.getWidth() - margin, mousePosition.x)); // Если колесо слишком широко, выбираем середину доступной области.
             mousePosition.y = Core.scene.getHeight() < margin * 2 ? Core.scene.getHeight() / 2 : Math.max(margin, Math.min(Core.scene.getHeight() - margin, mousePosition.y)); // Аналогично обрабатываем верхний и нижний края.
@@ -415,6 +428,7 @@ Events.on(ClientLoadEvent, () => {
         setBlock: function(w, s, block) { wheelSlots[w][s] = block; },
         wheelView: wheelView, // Тот же объект основы, с appearance, передаём манекену по ссылке.
         controls: controls, // Левая часть настроек меняет тот же объект, который читают обработчики ввода.
+        computerInputActive: computerInputActive, // Меню использует то же условие компьютерного управления без изменения своей компоновки.
         closeWheel: closeWheel
     });
 
@@ -437,7 +451,7 @@ Events.on(ClientLoadEvent, () => {
     }
 
     function canOpenWheel() { // Условия открытия одинаковы для назначенной клавиши, цифры и прокрутки.
-        return windowFocused && Vars.state.isGame() && !wheelInputBlocked() && !capturedLeft && !capturedRight; // Пауза допустима, перехваченный жест мыши и чужой диалог — нет.
+        return computerInputActive() && windowFocused && Vars.state.isGame() && !wheelInputBlocked() && !capturedLeft && !capturedRight; // Пауза допустима, перехваченный жест мыши и чужой диалог — нет.
     }
 
     function mouseGestureAllows(modifier) { // Удержание назначенного мышиного модификатора не считается посторонним жестом строительства.
@@ -448,7 +462,7 @@ Events.on(ClientLoadEvent, () => {
     function captureKey(key) { capturedKeys[key.ordinal()] = true; return true; } // Собственное действие поглощает и нажатие, и отпускание, чтобы игра не выполнила параллельную команду.
 
     function handleHotkey(key) { // Вызывается и клавиатурой, и кнопками мыши.
-        if (!windowFocused) return false; // Не выполняем отложенную команду после потери фокуса игрового окна.
+        if (!computerInputActive() || !windowFocused) return false; // MobileInput получает свои клавиши без перехвата; потеря фокуса также запрещает команды мода.
         if (settingsMenu.handleKeyDown(key)) return true; // Сначала даём собственным открытым окнам обработать закрытие.
         if (settingsMenu.isRebinding()) return false; // Новую клавишу принимает штатная плашка, а не действие мода.
         if (matches(controls.bindings.paletteModifier, controls.bindings.paletteKey, key) && (!Vars.state.isMenu() || controls.paletteInMenu) && (settingsMenu.canOpenPaletteFromKey != null ? settingsMenu.canOpenPaletteFromKey() : !Core.scene.hasKeyboard() && !Core.scene.hasDialog())) { // Меню отличает фокус собственного диалога от ввода текста; чужие окна сохраняют клавишу.
@@ -493,13 +507,14 @@ Events.on(ClientLoadEvent, () => {
         // Каждый запрос — отдельный объект, даже при выборе того же блока.
         // Это позволяет отличить отменённую задачу от более нового выбора.
         var selection = {block: block};
+        if (OS.isAndroid) selection.handler = Vars.control.input; // Отложенный выбор относится только к обработчику, при котором игрок нажал ЛКМ.
         pendingSelection = selection;
         Core.app.post(() => {
             // Задача остаётся в очереди после отмены, но ничего не делает.
             if (pendingSelection !== selection) return;
             pendingSelection = null;
             // Пока задача ждала, мир или доступность блока могли измениться.
-            if (!Vars.state.isGame() || wheelInputBlocked()
+            if (!computerInputActive() || (OS.isAndroid && Vars.control.input !== selection.handler) || !Vars.state.isGame() || wheelInputBlocked()
                 || !canSelectBlock(selection.block)) return;
 
             // 2.3) Это штатное поле выбранного строительного блока.
@@ -520,9 +535,51 @@ Events.on(ClientLoadEvent, () => {
     Events.on(ResetEvent, () => { closeWheel(); resetCapturedInput(); }); // Сброс мира - сброс колеса
     Events.on(ResizeEvent, () => closeWheel()); // При изменении размеров окна освобождаем режим с прежним масштабом координат.
     Core.app.addListener(extend(ApplicationListener, { // Потеря фокуса окна является отдельным событием приложения, а не покадровой проверкой.
-        pause: function() { windowFocused = false; closeWheel(); resetCapturedInput(); }, // Возвращаем курсор и прекращаем захват прокрутки при переключении в другое приложение.
+        pause: function() { windowFocused = false; closeWheel(); resetCapturedInput(); if (androidCtrlBridge != null) androidCtrlBridge.release(); }, // Не оставляем собственный Ctrl зажатым, если он отпущен вне приложения.
         resume: function() { windowFocused = true; } // Возобновляем реакцию на новые события после возвращения в игру.
     }));
+
+    // АППАРАТНЫЙ CTRL В ANDROIDINPUT ARC
+    function installAndroidCtrlBridge() { // Arc v160.7 относит Ctrl к устаревшим кодам 129/130 вместо аппаратных 113/114.
+        if (!OS.isAndroid || String(Core.input.getClass().getName()) != "arc.backend.android.AndroidInput") return null;
+        try {
+            var input = Core.input, mapClass = input.getClass().getClassLoader().loadClass("arc.backend.android.AndroidInputMap");
+            var map = mapClass.getDeclaredMethod("getKeyCode", [java.lang.Integer.TYPE]); map.setAccessible(true); // Проверяем именно установленный backend, а не предполагаем наличие ошибки во всех версиях Arc.
+            var oldCodes = [129, 130], ctrlKeys = [KeyCode.controlLeft, KeyCode.controlRight], remap = [];
+            for (var i = 0; i < 2; i++) remap[i] = map.invoke(null, [java.lang.Integer.valueOf(113 + i)]) == KeyCode.unknown && map.invoke(null, [java.lang.Integer.valueOf(oldCodes[i])]) == ctrlKeys[i];
+            if (!remap[0] && !remap[1]) return null; // Уже исправленный Arc продолжает самостоятельно обрабатывать Ctrl.
+            var alive = new java.util.concurrent.atomic.AtomicBoolean(true), held = [null, null], keyView = null; // Запоминаем обработчик, при котором получено нажатие каждого Ctrl.
+            var releaseHeld = new Packages.rhino.Synchronizer(function(keepHandler) { // Тот же монитор AndroidInput сохраняет порядок при одновременном pause и событии UI-потока.
+                for (var side = 0; side < 2; side++) if (held[side] != null && held[side] !== keepHandler) {
+                    held[side] = null;
+                    try { input.onKey(keyView, oldCodes[side], new Packages.android.view.KeyEvent(1, oldCodes[side])); }
+                    catch (error) { alive.set(false); Log.err("BuildWheel: Android Ctrl release failed", String(error)); }
+                }
+            }, input);
+            var remapKey = new Packages.rhino.Synchronizer(function(view, code, event) { // В потоке ввода меняем только очередь AndroidInput, без обращений к сцене.
+                    if (!alive.get()) return false;
+                    var side = code - 113;
+                    var action = event.getAction();
+                    if (action != 0 && action != 1) return false;
+                    if (!menuModule.computerInputActive() && !(action == 1 && held[side])) return false; // MobileInput не перехватываем; завершаем только Ctrl, начатый при компьютерном управлении.
+                    try {
+                        var replacement = new Packages.android.view.KeyEvent(event.getDownTime(), event.getEventTime(), action, oldCodes[side], event.getRepeatCount(), event.getMetaState(), event.getDeviceId(), event.getScanCode(), event.getFlags(), event.getSource());
+                        keyView = view; if (action == 0) held[side] = Vars.control.input;
+                        input.onKey(view, oldCodes[side], replacement); // Кладём исправленное событие в ту же очередь, сохраняя порядок Ctrl → цифра → отпускание.
+                        if (action == 1) held[side] = null; return true;
+                    } catch (error) { alive.set(false); releaseHeld(); Log.err("BuildWheel: Android Ctrl bridge disabled", String(error)); return false; }
+            }, input);
+            input.addKeyListener(new JavaAdapter(Packages.android.view.View.OnKeyListener, {
+                onKey: function(view, code, event) {
+                    var side = code - 113;
+                    if (!alive.get() || side < 0 || side > 1 || !remap[side]) return false; // Повторный вызов с 129/130 сразу проходит в штатную очередь, без рекурсии.
+                    return remapKey(view, code, event);
+                }
+            }));
+            return {release: releaseHeld, dispose: function() { alive.set(false); releaseHeld(); }};
+        } catch (error) { Log.err("BuildWheel: Android Ctrl bridge unavailable", String(error)); return null; } // Неудача необязательного моста не прерывает загрузку мода.
+    }
+    androidCtrlBridge = installAndroidCtrlBridge();
 
     //==============================================================
     // 1.2) Назначенные клавиши; по умолчанию Ctrl + цифра, прокрутка без назначения выключена.
@@ -535,6 +592,7 @@ Events.on(ClientLoadEvent, () => {
 
         // 3) Отпускания клавиш меню должны обрабатываться при открытом меню, которые так-то блокируется при запуске.
         keyUp: function(key) {
+            if (!computerInputActive()) return false; // Сенсорное управление не наследует перехваты предыдущего DesktopInput.
             if (key == scrollHeldKey) { scrollHeldKey = KeyCode.unset; wheelScrollAmount = 0; } // Отпускание прекращает захват прокрутки, оставляя колесо открытым.
             if (capturedKeys[key.ordinal()]) { capturedKeys[key.ordinal()] = false; return true; } // Не оставляем игре отпускание клавиши, нажатие которой было перехвачено.
             return settingsMenu.handleKeyUp(key);
@@ -542,6 +600,7 @@ Events.on(ClientLoadEvent, () => {
 
         // ПЕРЕКЛЮЧЕНИЕ НОМЕРОВ ПРОКРУТКОЙ БЕЗ МАСШТАБИРОВАНИЯ КАРТЫ
         scrolled: function(amountX, amountY) { // Arc передаёт прокрутку вперёд отрицательным amountY, назад — положительным.
+            if (!computerInputActive()) return false;
             if (virtualActive && scrollHeldKey == KeyCode.unset) return true; // Виртуальное колесо не передаёт прокрутку карте или чужому HUD.
             if (scrollHeldKey == KeyCode.unset || !Vars.state.isGame()) return false; // Обычную прокрутку без удержания назначенной клавиши и в главном меню не перехватываем.
             if (wheelInputBlocked()) { // Диалоги, ввод текста и выделение области сохраняют приоритет перед колесом.
@@ -565,6 +624,7 @@ Events.on(ClientLoadEvent, () => {
         //==============================================================
         //Обрабатываем именно нажатие, а не отпускание мыши.
         touchDown: function(screenX, screenY, pointer, button) {
+            if (!computerInputActive()) return false; // Обычные мобильные жесты полностью остаются игре.
             if (handleHotkey(button)) return true; // Любое собственное действие, включая открытие меню, может быть назначено на кнопку мыши.
             // 2.4) Действие из списка также может быть назначено на кнопку мыши.
             // Уже захваченный жест по-прежнему удерживаем до его отпускания.
@@ -609,6 +669,7 @@ Events.on(ClientLoadEvent, () => {
         },
 
         touchUp: function(screenX, screenY, pointer, button) {
+            if (!computerInputActive()) return false;
             if (button == scrollHeldKey) { scrollHeldKey = KeyCode.unset; wheelScrollAmount = 0; } // Основная клавиша прокрутки может быть кнопкой мыши.
             if (capturedKeys[button.ordinal()]) { capturedKeys[button.ordinal()] = false; return true; } // Завершаем перехваченное назначение мыши, не отдавая отпускание игре.
             if (settingsMenu.handleKeyUp(button)) return true;
@@ -626,6 +687,7 @@ Events.on(ClientLoadEvent, () => {
         },
 
         touchDragged: function(screenX, screenY, pointer) {
+            if (!computerInputActive()) return false;
             if (motionActive && mouseMotion(screenX, screenY)) return true; // Движение с удержанной кнопкой подчиняется той же окружности.
             if (!capturedLeft && !capturedRight) return false;
             Core.scene.mouseMoved(screenX, screenY);

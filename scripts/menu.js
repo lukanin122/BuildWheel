@@ -12,6 +12,8 @@ var browserModule = require("wheel-browser"); // Браузер сохранен
 
 // ОБЩИЕ НАСТРОЙКИ УПРАВЛЕНИЯ
 var controlsCache = null; // Один набор настроек используют обработчики main.js и открываемая форма меню.
+exports.computerInputActive = function() { return !OS.isAndroid || (Vars.control != null && Vars.control.input instanceof DesktopInput); }; // На Android режим задаёт текущий обработчик управления, а не неизменный Vars.mobile.
+
 exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
     if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
     var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
@@ -625,7 +627,7 @@ exports.create = function(api) {
         var accept = key => { bind.value = new KeyBind.Axis(key); bind.save(); modal.hide(); }; // Назначение хранится обычным методом KeyBind, без собственных форматов клавиш.
         modal.addListener(extend(InputListener, { // Штатная схема принимает любую клавишу или кнопку мыши.
             keyDown: function(event, key) { accept(key); return false; }, // Escape также можно назначить, как в стандартном окне управления.
-            touchDown: function(event, x, y, pointer, button) { if (!Vars.mobile) accept(button); return false; } // Кнопки «Назад»/«Отключить» остановлены blocker выше.
+            touchDown: function(event, x, y, pointer, button) { if (!Vars.mobile || (OS.isAndroid && exports.computerInputActive())) accept(button); return false; } // Компьютерное управление Android также принимает кнопки мыши; кнопки «Назад»/«Отключить» остановлены blocker выше.
         }));
         bindingModal = modal; // Горячие клавиши мода оставляют ввод этой плашке.
         var previous = controls.key(bind); // Запоминаем состояние до пользовательского изменения.
@@ -915,6 +917,7 @@ exports.create = function(api) {
 
     //Открытие всего меню
     function show(wheelNumber) {
+        if (!api.computerInputActive()) return; // При обычном MobileInput собственные окна не забирают сенсорное управление.
         if (dialog.isShown()) return; // Редактор доступен и из «Базы данных» главного меню; повторное открытие не создаёт второе окно.
         // *Сохраняем номер ДО closeWheel/show: слушатель в main.js сбросит
         // *activeWheelNumber при открытии любого диалога, включая наше меню.
@@ -928,7 +931,7 @@ exports.create = function(api) {
 
     // КНОПКА «РАДИАЛЬНОГО МЕНЮ» В ШТАТНОМ МЕНЮ ESC
     var pauseButtonInstalled = false, pauseButtonQueued = false; // Проверяем занятое место только при первом успешном открытии, без update-обработчиков.
-    function openFromPause() { Vars.ui.paused.hide(); show(editedWheel); } // Обработчик не удерживает временный список занятых мест, собранный при первом открытии.
+    function openFromPause() { if (api.computerInputActive()) { Vars.ui.paused.hide(); show(editedWheel); } } // Сенсорный режим оставляет штатное меню открытым.
     if (Vars.ui.paused != null) Vars.ui.paused.shown(() => { // В этот момент штатное меню уже построило своё содержимое.
         if (pauseButtonInstalled || pauseButtonQueued) return; // Повторный показ не создаёт второй кнопки или второй проверки.
         pauseButtonQueued = true; // Не добавляем одинаковые отложенные задачи.
@@ -1070,7 +1073,8 @@ exports.create = function(api) {
     // переменные редактора остаются внутри create().
     return {
         show: show,
-        showPalette: function() { api.closeWheel(); palette.show(); }, // Горячая клавиша открывает палитру напрямую, не создавая родительское окно настроек.
+        inputDisabled: function() { hide(); closeKeysCaptured = []; }, // Смена на MobileInput закрывает только окна BuildWheel и отменяет их перехваты клавиш.
+        showPalette: function() { if (api.computerInputActive()) { api.closeWheel(); palette.show(); } }, // Горячая клавиша открывает палитру напрямую, не создавая родительское окно настроек.
         canOpenPaletteFromKey: function() { // Комбинация работает поверх собственных нетекстовых окон, но не забирает ввод чужого диалога.
             var top = topDialog(), focus = Core.scene.getKeyboardFocus(); // Проверка выполняется только при подходящей комбинации; Dialog.show сам назначает фокус диалогу.
             if (top == null) return focus == null; // Чат и другие поля вне диалогов сохраняют текстовый ввод.
