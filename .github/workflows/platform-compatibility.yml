@@ -90,12 +90,22 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Android SDK 36 build prerequisites
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-      - name: Enable KVM for the disposable AVD
+      - name: Inspect acceleration for the disposable AVD
+        id: acceleration
         run: |
+          mkdir -p "$RUNNER_TEMP/buildwheel-android-results"
+          { uname -a; id; ls -l /dev/kvm || true; lscpu; } > "$RUNNER_TEMP/buildwheel-android-results/acceleration.log" 2>&1
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm && test -w /dev/kvm
+          sudo udevadm settle
+          if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm; fi
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo 'disable=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'KVM unavailable; request emulator software translation and record the limitation.' | tee -a "$RUNNER_TEMP/buildwheel-android-results/acceleration.log"
+            echo 'disable=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Build test-only actual Android client
         run: python3 tests/platform/android-ci.py prepare --output "$RUNNER_TEMP/buildwheel-android-results"
       - name: Actual Android emulator execution
@@ -106,6 +116,8 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: true
+          disable-linux-hw-accel: ${{ steps.acceleration.outputs.disable }}
+          emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 tests/platform/android-ci.py run --output "$RUNNER_TEMP/buildwheel-android-results"
       - name: Save Android diagnostics
