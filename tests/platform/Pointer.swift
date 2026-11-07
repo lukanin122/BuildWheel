@@ -7,12 +7,22 @@ let pid = args.count > 1 ? Int32(args[1]) ?? 0 : 0
 let mode = args.count > 2 ? args[2] : "prepare"
 var info: [String: Any] = ["eventSource": "CoreGraphics synthetic HID events", "postEventAccess": CGPreflightPostEventAccess(), "pid": pid, "mode": mode]
 if pid > 0, let app = NSRunningApplication(processIdentifier: pid) {
-    info["activated"] = app.activate(options: [.activateIgnoringOtherApps])
+    info["activated"] = app.activate(options: [])
 }
 Thread.sleep(forTimeInterval: 0.12)
 let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
 var rect: CGRect?
+if args.count > 3,
+   let data = try? Data(contentsOf: URL(fileURLWithPath: args[3])),
+   let geometry = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+   let x = geometry["windowX"] as? Double, let y = geometry["windowY"] as? Double,
+   let width = geometry["logicalWidth"] as? Double, let height = geometry["logicalHeight"] as? Double,
+   width > 100, height > 100 {
+    rect = CGRect(x: x, y: y, width: width, height: height)
+    info["geometrySource"] = "Verified SDL window position and logical size"
+}
 for window in windows {
+    if rect != nil { break }
     if (window[kCGWindowOwnerPID as String] as? Int32) == pid,
        let bounds = window[kCGWindowBounds as String] as? NSDictionary,
        let r = CGRect(dictionaryRepresentation: bounds), r.width > 100, r.height > 100 {

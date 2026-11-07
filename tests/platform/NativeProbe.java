@@ -408,7 +408,7 @@ public final class NativeProbe implements ApplicationListener {
     }
     void closeFfm(){if(ffi!=null){try{ffi.close();report.put("probeArenaClosed",true);}catch(Throwable t){report.put("probeArenaCloseException",trace(t));}ffi=null;}}
     void failure(Throwable t,String kind){report.put("exception",trace(t));report.put("classification",kind);t.printStackTrace();finish();}
-    void setPhase(String p){phase=p;phaseStart=System.nanoTime();event(p,safeState());write();}
+    void setPhase(String p){phase=p;phaseStart=System.nanoTime();Map<String,Object> snapshot=safeState();event(p,snapshot);marker("probe-phase.json",snapshot);write();}
     void check(String id,boolean ok,String failure,Object detail){Map<String,Object> item=new LinkedHashMap<>();item.put("test",id);item.put("classification",ok?"PASS":failure);item.put("detail",detail);checks.add(item);event("check",item);}
     boolean hasDefect(){return checks.stream().anyMatch(m->"CONFIRMED_COMPONENT_DEFECT".equals(m.get("classification")));}
     int mode() throws Throwable{return ((Number)invoke("mode")).intValue();}
@@ -420,7 +420,7 @@ public final class NativeProbe implements ApplicationListener {
     Map<String,Object> dimensions(){return Map.of("logicalWidth",Core.graphics.getWidth(),"logicalHeight",Core.graphics.getHeight(),"backBufferWidth",Core.graphics.getBackBufferWidth(),"backBufferHeight",Core.graphics.getBackBufferHeight(),"density",Core.graphics.getDensity());}
     Map<String,Object> state() throws Throwable {
         Map<String,Object> out=new LinkedHashMap<>();long window=((SdlApplication)Core.app).getWindow();
-        out.put("phase",phase);out.put("elapsed",elapsed(processStart));out.put("flags",SDL.SDL_GetWindowFlags(window));
+        out.put("phase",phase);out.put("elapsed",elapsed(processStart));out.put("flags",SDL.SDL_GetWindowFlags(window));out.put("pid",ProcessHandle.current().pid());out.putAll(dimensions());
         out.put("arcMouseX",Core.input.mouseX());out.put("arcMouseY",Core.input.mouseY());out.put("SDL_error",String.valueOf(SDL.SDL_GetError()));
         if(ffi!=null && functions.containsKey("mode")) {
             out.put("mode",mode());out.put("cursorShown",((Number)invoke("cursor",-1)).intValue());

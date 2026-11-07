@@ -155,7 +155,7 @@ def inject(env, proc, case, mode, wayland=False):
     logfile = case / "input-injection.jsonl"
     try:
         if IS_MAC and (OUT / "pointer").exists():
-            result = subprocess.run([str(OUT / "pointer"), str(proc.pid), mode], env=env, capture_output=True, text=True, timeout=8)
+            result = subprocess.run([str(OUT / "pointer"), str(proc.pid), mode, str(case / "probe-phase.json")], env=env, capture_output=True, text=True, timeout=8)
             value = {"source": "CoreGraphics synthetic HID", "mode": mode, "exit": result.returncode, "stdout": result.stdout[-4000:], "stderr": result.stderr[-1000:]}
         elif IS_LINUX:
             window = x_window(env, wayland)
@@ -203,10 +203,11 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
                 p.wait()
                 timed_out = True
                 break
-            if not prepared and (case / "window-ready.json").exists():
+            phase = read_result(case / "probe-phase.json").get("phase")
+            if not prepared and (case / "probe-phase.json").exists():
                 inject(env, p, case, "prepare", wayland)
                 prepared = True
-            if (case / "relative-ready.json").exists() and now-last_motion > .8:
+            if phase == "sampling" and (case / "relative-ready.json").exists() and now-last_motion > .8:
                 inject(env, p, case, "motion", wayland)
                 last_motion = now
             time.sleep(.1)
@@ -217,7 +218,7 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
     if IS_LINUX:
         capture(["xprop", "-root", "_NET_ACTIVE_WINDOW"], case / "x-focus-after.log", base_env, timeout=5)
 
-def game_smoke(name, base_env):
+def game_smoke(name, base_env, wayland=False, system_sdl=False):
     case = OUT / name
     profile = case / "profile"
     target = profile / "mods/BuildWheel"
@@ -229,8 +230,10 @@ def game_smoke(name, base_env):
         shutil.copy2(ROOT / rel, dst)
     env = environment(case)
     env.update({k: v for k, v in base_env.items() if k in {"DISPLAY","LIBGL_ALWAYS_SOFTWARE","GALLIUM_DRIVER","XDG_RUNTIME_DIR","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER"}})
-    if IS_LINUX: env["SDL_VIDEODRIVER"] = "x11"
-    command = java_command("GameSmoke", case, case, "3", extra_flags=["-Dmindustry.data.dir=" + str(profile), "-Dnodiscord=true"])
+    if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
+    flags = ["-Dmindustry.data.dir=" + str(profile), "-Dnodiscord=true"]
+    if system_sdl: flags.append("-DSDL2_STATIC=1")
+    command = java_command("GameSmoke", case, case, "3", extra_flags=flags)
     execution = capture(command, case / "process.log", env=env, cwd=case, timeout=150)
     record(name, "REAL_FULL_GAME_SMOKE", execution, read_result(case / "game-smoke-result.json"),
            "Actual DesktopLauncher, unmodified BuildWheel, native GL and real assets; default editor only")
@@ -311,6 +314,10 @@ try:
                 native_case("native-wayland-backend-only", wayland, "backend-only", wayland=True)
                 native_case("native-wayland-normal", wayland, wayland=True)
                 native_case("native-wayland-forced-warp", wayland, "forced-warp", wayland=True)
+                native_case("native-wayland-system-backend-only", wayland, "backend-only", wayland=True, system_sdl=True)
+                native_case("native-wayland-system-normal", wayland, wayland=True, system_sdl=True)
+                native_case("native-wayland-system-forced-warp", wayland, "forced-warp", wayland=True, system_sdl=True)
+                game_smoke("full-game-wayland-system-editor", wayland, wayland=True, system_sdl=True)
         game_smoke("full-game-default-editor", graphics)
 except Exception as exc:
     import traceback
