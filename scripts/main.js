@@ -546,7 +546,7 @@ Events.on(ClientLoadEvent, () => {
             var input = Core.input, mapClass = input.getClass().getClassLoader().loadClass("arc.backend.android.AndroidInputMap");
             var map = mapClass.getDeclaredMethod("getKeyCode", [java.lang.Integer.TYPE]); map.setAccessible(true); // Проверяем именно установленный backend, а не предполагаем наличие ошибки во всех версиях Arc.
             var oldCodes = [129, 130], ctrlKeys = [KeyCode.controlLeft, KeyCode.controlRight], remap = [];
-            for (var i = 0; i < 2; i++) remap[i] = map.invoke(null, [java.lang.Integer.valueOf(113 + i)]) == KeyCode.unknown && map.invoke(null, [java.lang.Integer.valueOf(oldCodes[i])]) == ctrlKeys[i];
+            for (var i = 0; i < 2; i++) remap[i] = map.invoke(null, [new java.lang.Integer(String(113 + i))]) == KeyCode.unknown && map.invoke(null, [new java.lang.Integer(String(oldCodes[i]))]) == ctrlKeys[i]; // Явный Integer сохраняет тип int при передаче через Method.invoke из Rhino.
             if (!remap[0] && !remap[1]) return null; // Уже исправленный Arc продолжает самостоятельно обрабатывать Ctrl.
             var alive = new java.util.concurrent.atomic.AtomicBoolean(true), held = [null, null], keyView = null; // Запоминаем обработчик, при котором получено нажатие каждого Ctrl.
             var releaseHeld = new Packages.rhino.Synchronizer(function(keepHandler) { // Тот же монитор AndroidInput сохраняет порядок при одновременном pause и событии UI-потока.
