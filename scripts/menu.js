@@ -15,7 +15,7 @@ var controlsCache = null; // Один набор настроек использ
 exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
     if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
     var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
-    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false, wheelOpenPitch: true}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
+    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false, wheelOpenPitch: true, dimMissingMaterials: true}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
     for (var key in controls) { // Читаем переключатели и долю сдвига только при создании набора.
         try {
             if (key == "edgeShift") { // Единственное дробное значение задаёт отступ от краёв экрана.
@@ -689,7 +689,7 @@ exports.create = function(api) {
         }
         var table = new Table(); // Таблица располагается сразу под списком блоков.
         table.left(); // Сохраняем общий левый край списка и подписей настроек.
-        var titles = [Core.bundle.format("buildwheel.controls.edge-shift", 100), Core.bundle.get("buildwheel.controls.disable-number-keys"), Core.bundle.get("buildwheel.controls.clip-outer"), Core.bundle.get("buildwheel.controls.clip-inner"), Core.bundle.get("buildwheel.controls.wheel-selection"), Core.bundle.get("buildwheel.menu.radial-title"), Core.bundle.get("buildwheel.menu.palette-title"), Core.bundle.get("buildwheel.controls.palette-in-menu"), Core.bundle.get("buildwheel.controls.scroll-key"), Core.bundle.get("buildwheel.controls.show-number"), Core.bundle.get("buildwheel.controls.relative-mouse"), Core.bundle.get("buildwheel.controls.wheel-open-pitch")]; // Учитываем все подписи и наибольшую длину процента сдвига.
+        var titles = [Core.bundle.format("buildwheel.controls.edge-shift", 100), Core.bundle.get("buildwheel.controls.disable-number-keys"), Core.bundle.get("buildwheel.controls.clip-outer"), Core.bundle.get("buildwheel.controls.clip-inner"), Core.bundle.get("buildwheel.controls.wheel-selection"), Core.bundle.get("buildwheel.menu.radial-title"), Core.bundle.get("buildwheel.menu.palette-title"), Core.bundle.get("buildwheel.controls.palette-in-menu"), Core.bundle.get("buildwheel.controls.scroll-key"), Core.bundle.get("buildwheel.controls.show-number"), Core.bundle.get("buildwheel.controls.relative-mouse"), Core.bundle.get("buildwheel.controls.wheel-open-pitch"), Core.bundle.get("buildwheel.controls.dim-missing-materials")]; // Учитываем все подписи и наибольшую длину процента сдвига.
         var longest = 0, measure = new Label(""); // Один временный Label измеряет фактическую ширину игрового шрифта.
         for (var i = 0; i < titles.length; i++) { measure.setText(titles[i]); longest = Math.max(longest, measure.getPrefWidth() / Scl.scl()); } // Переводим измеренные пиксели в UI-единицы, как при расчёте ширины всей панели.
         var layout = {width: width - 18}; // Постоянно оставляем справа 18 UI-пикселей под полосу прокрутки.
@@ -732,6 +732,7 @@ exports.create = function(api) {
         controlToggle(relativeRow, "relativeMouse", Core.bundle.get("buildwheel.controls.relative-mouse.description")); // Основной режим не зависит от включения двух круговых ограничителей.
         controlToggle(relativeRow, "customArrow", Core.bundle.get("buildwheel.controls.custom-arrow.description")); // Выбор изображения действует и при relative mode, включённом ограничителями.
         addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.wheel-open-pitch"), "wheelOpenPitch", Core.bundle.get("buildwheel.controls.wheel-open-pitch.description")); // По умолчанию включено; у каждого номера своя высота тона звука открытия.
+        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.dim-missing-materials"), "dimMissingMaterials", null); // Последний переключатель затемняет иконки при нехватке материалов, сохраняя возможность выбора блока.
         return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
     }
 

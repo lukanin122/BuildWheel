@@ -1,7 +1,15 @@
 name: "BuildWheel"
+
 displayName: "Build Wheel"
+
 author: "[#666999[]]Name[#CC0000[]]less[#FFFF00[]]Ways"
-version: "1.0.0"
+
+version: "1.0.1-alpha"
+
+minGameVersion: "160.7"
+
+hidden: true
+
 description:
   '''
 [#666666[]][ENG] [yellow[]]Build Wheel [#CFFFFF[]]- The ultimate UI solution for both thoughtful and lightning-fast block construction.
@@ -16,8 +24,10 @@ description:
  
   [#6C6699[]] Intentionally excluded:
  [white[]] [#9999CC[]] Adding schematics to wheel selection (plenty of alternatives exist — that's not what this mod is for)
+ [white[]] [#9999CC[]] "The number of wheels is artificially limited to 10 (unless people ask for a regulator)."
  
   [#FF6600[]]⚠ [#FFD200[]]Th[#FF9900[]]is[#FFD200[]] m[#FF9900[]]od[#FFD200[]] i[#FF9900[]]s [#FFD200[]]fo[#FF9900[]]r [#FFD200[]]de[#FF9900[]]sk[#FFD200[]]to[#FF9900[]]p [#FFD200[]]co[#FF9900[]]mp[#FFD200[]]ut[#FF9900[]]er[#FFD200[]]s [#FF9900[]]on[#FFD200[]]ly[#FF9900[]]!
+  
 
 
 [white[]]--------------------------------------------------
@@ -34,9 +44,8 @@ description:
  [white[]] [#CCCCCC[]] Оптимизация мода от нагрузки
  
   [#6C6699[]] Не добавлено специально:
- [white[]] [#9999CC[]] Использование схематик в колесе строительства (альтернатив других модов уже множество)
+ [white[]] [#9999CC[]] Использование схематик в колесе строительства (альтернатив от других модов уже множество)
+ [white[]] [#9999CC[]] Количество колёс намеренно ограничено до 10 (если не будет просьб поставить регулятор)
  
   [#FF6600[]]⚠ [#FFD200[]]Мо[#FF9900[]]д [#FFD200[]]дл[#FF9900[]]я [#FFD200[]]пе[#FF9900[]]рс[#FFD200[]]он[#FF9900[]]ал[#FFD200[]]ьн[#FF9900[]]ых[#FFD200[]] к[#FF9900[]]ом[#FFD200[]]пь[#FF9900[]]ют[#FFD200[]]ер[#FF9900[]]ов[#FFD200[]]!
   '''
-minGameVersion: "147"
-hidden: true

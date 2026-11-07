@@ -179,8 +179,12 @@ Events.on(ClientLoadEvent, () => {
         useSharedVisual: true, // Игровое колесо использует закреплённый визуал, если замок включён.
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
-        getIconAlpha: function(block) {// Проверяем доступность блока в этом мире; количество ресурсов здесь не проверяется.
-            return canSelectBlock(block) && block.isPlaceable() ? 1 : 0.30; // Доступный блок полностью непрозрачен (1), недоступный рисуется с alpha 0.30.
+        getIconAlpha: function(block) { // Затемнение влияет только на иконку: нехватка материалов не мешает выбрать блок для строительства.
+            if (!canSelectBlock(block) || !block.isPlaceable()) return 0.30; // Недоступные в этом мире блоки остаются тусклыми независимо от настройки материалов.
+            var rules = Vars.state.rules; // Используем текущие правила мира, в том числе изменённые во время игры.
+            if (!controls.dimMissingMaterials || rules.isInfiniteResources(Vars.player.team())) return 1; // При выключенной настройке или бесконечных ресурсах запасы ядра проверять не нужно.
+            var core = Vars.player.core(); // Материалы берём из ядра команды игрока, как в строительном меню Mindustry.
+            return core != null && core.items.has(block.requirements, rules.buildCostMultiplier) ? 1 : 0.30; // Штатный метод учитывает множитель стоимости и округление; без ядра конечные ресурсы недоступны.
         },
 
         // Открытие колеса делает областью для клика весь экран.
