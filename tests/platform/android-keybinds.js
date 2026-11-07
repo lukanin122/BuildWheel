@@ -49,6 +49,14 @@ function buildWheelAndroidKeyDiagnostics(api) {
     function close() {
         tap(A.KEYCODE_ESCAPE);
         api.step(api.closeDialogs, 12); // Let existing dialog hide actions finish before another hotkey.
+        waitForDialogs();
+    }
+    function waitForDialogs() {
+        api.step(function() {}, 1, function() {
+            var children = Core.scene.root.getChildren();
+            for (var i = 0; i < children.size; i++) if (children.get(i) instanceof Packages.arc.scene.ui.Dialog) return false;
+            return Core.scene.getDialog() == null;
+        }); // isShown remains true during the real 0.4-second fade, regardless of emulator frame rate.
     }
     function setup(name, action) {
         api.step(function() { scenario = name; api.closeDialogs(); disabled(); if (action) action(); }, 12);
@@ -61,6 +69,7 @@ function buildWheelAndroidKeyDiagnostics(api) {
         if (button) api.step(function() { api.click("buildwheel-rebind-" + button); }, 16);
         else tap(raw);
         api.step(function() { assertKey(bind, key); api.closeDialogs(); }, 16);
+        waitForDialogs();
     }
     function checkpointAssignments() {
         disabled(); save(binds.wheelModifier, KeyCode.f2); save(binds.wheels[1], KeyCode.u);
