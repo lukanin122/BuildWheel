@@ -1,6 +1,7 @@
 import arc.ApplicationListener;
 import arc.Core;
 import arc.Events;
+import arc.Settings;
 import arc.files.Fi;
 import arc.scene.Element;
 import arc.scene.Group;
@@ -15,6 +16,7 @@ import mindustry.ui.fragments.MenuFragment.MenuButton;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.concurrent.*;
+import java.util.*;
 
 /**
  * Starts the actual game and unmodified mod with a native SDL/OpenGL window.
@@ -32,6 +34,46 @@ public final class GameSmoke {
     static double renderSeconds;
     static String glVersion = "unavailable", appClass = "unavailable";
     static Dialog editor;
+    static final boolean recovery = Boolean.getBoolean("buildwheel.smoke.recovery");
+    static final boolean restart = Boolean.getBoolean("buildwheel.smoke.restart");
+    static final Map<String,Object> preserved = new LinkedHashMap<>();
+    static byte[] libraryBefore;
+
+    static void prepareRecovery() throws Exception {
+        if (!recovery) return;
+        Settings seed = new Settings(); seed.setAutosave(false); seed.setDataDirectory(new Fi(profile.toFile())); seed.load();
+        preserved.put("buildwheel.smoke.sentinel", "Keep these settings");
+        preserved.put("buildwheel.slot.1.0.block", Integer.valueOf(7));
+        preserved.put("buildwheel.slot.1.0.scale", Float.valueOf(1.75f));
+        preserved.put("buildwheel.slot.1.1.block", "conveyor");
+        preserved.put("buildwheel.slot.1.1.scale", "1");
+        preserved.put("buildwheel.slot.1.2.block", "router");
+        preserved.put("buildwheel.slot.1.2.scale", Float.valueOf(.65f));
+        preserved.put("buildwheel.slot.1.count", Integer.valueOf(128));
+        preserved.put("buildwheel.slot.1.127.block", "copper-wall");
+        preserved.put("buildwheel.slot.1.127.scale", Float.valueOf(1.4f));
+        preserved.put("buildwheel.controls.edgeShift", Float.valueOf(.65f));
+        preserved.put("sfxvol", Integer.valueOf(37));
+        Path library=profile.resolve("buildwheel/library.json");
+        if (restart) {
+            if (!seed.has("buildwheel.smoke.sentinel") || !Files.exists(library)) throw new IllegalStateException("Restart requires the preceding persisted profile; will not reseed");
+        } else {
+            if (seed.has("buildwheel.smoke.sentinel")) throw new IllegalStateException("Initial recovery test requires a fresh profile");
+            for (var entry:preserved.entrySet()) seed.put(entry.getKey(),entry.getValue());
+            seed.manualSave();
+            Files.createDirectories(library.getParent());
+            Files.writeString(library,"{\"version\":1,\"nextId\":2,\"entries\":[{\"id\":\"1\",\"type\":\"blocks\",\"name\":\"Keep this wheel\",\"description\":\"\",\"data\":{\"slots\":[{\"block\":\"conveyor\",\"scale\":1}]}}]}");
+        }
+        libraryBefore=Files.readAllBytes(library);
+        verifyRecovery(seed);
+    }
+    static void verifyRecovery(Settings settings) throws Exception {
+        if (!recovery) return;
+        for (var entry:preserved.entrySet()) if (!Objects.equals(settings.get(entry.getKey(),null),entry.getValue()))
+            throw new IllegalStateException("Recovery changed a persisted typed value: "+entry.getKey());
+        if (!Arrays.equals(libraryBefore,Files.readAllBytes(profile.resolve("buildwheel/library.json"))))
+            throw new IllegalStateException("Recovery changed existing wheel library bytes");
+    }
 
     static MenuButton findMenuButton(Iterable<MenuButton> buttons, String title) {
         if (buttons == null) return null;
@@ -65,6 +107,7 @@ public final class GameSmoke {
                 throw new IllegalStateException("Unexpected native backend: " + appClass);
             glVersion = String.valueOf(Core.graphics.getGLVersion());
             nativeWindowConfirmed = true;
+            verifyRecovery(Core.settings);
             String title = Core.bundle.get("buildwheel.menu.radial-title");
             MenuButton button = findMenuButton(Vars.ui.menufrag.desktopButtons, title);
             if (button == null) throw new IllegalStateException("BuildWheel database entry was not registered");
@@ -137,6 +180,8 @@ public final class GameSmoke {
                 + ",\n  \"editorNodes\": " + nodes
                 + ",\n  \"inputProcessors\": " + processors
                 + ",\n  \"launcherReturned\": " + launcherReturned
+                + ",\n  \"malformedSettingsRecovery\": " + recovery
+                + ",\n  \"freshProcessRestartWithoutReseed\": " + restart
                 + ",\n  \"failure\": " + quote(failure) + "\n}\n";
             Files.writeString(output.resolve("game-smoke-result.json"), json, StandardCharsets.UTF_8);
             System.out.println("GAME_SMOKE_RESULT " + status + " stage=" + stage);
@@ -151,8 +196,14 @@ public final class GameSmoke {
         if (explicitProfile == null || explicitProfile.isBlank())
             throw new IllegalArgumentException("Refusing to launch without an explicit disposable mindustry.data.dir");
         profile = Path.of(explicitProfile).toAbsolutePath().normalize();
+        if (System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("windows")) {
+            String appData = System.getenv("APPDATA");
+            if (appData == null || !Path.of(appData).toAbsolutePath().normalize().startsWith(profile))
+                throw new IllegalArgumentException("Windows smoke requires APPDATA inside the disposable profile: the launcher logs and IntelGpuCheck precede mindustry.data.dir");
+        }
         if (!Files.isDirectory(profile.resolve("mods")))
             throw new IllegalArgumentException("Disposable profile has no prepared mods directory");
+        prepareRecovery();
         renderSeconds = args.length > 1 ? Double.parseDouble(args[1]) : 3;
         if (!Double.isFinite(renderSeconds) || renderSeconds < 1 || renderSeconds > 30)
             throw new IllegalArgumentException("Render seconds outside 1..30");
@@ -176,6 +227,7 @@ public final class GameSmoke {
             DesktopLauncher.main(new String[0]);
             launcherReturned = true;
             if (failure == null && rendered) {
+                if (recovery) { Settings persisted = new Settings(); persisted.setAutosave(false); persisted.setDataDirectory(new Fi(profile.toFile())); persisted.load(); verifyRecovery(persisted); }
                 stage = "NATIVE_APP_DISPOSED";
                 writeResult("FULL_GAME_CLIENTLOAD_EDITOR_RENDERED");
             } else {

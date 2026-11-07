@@ -61,6 +61,8 @@ def environment(case):
     home = case / "home"
     home.mkdir(parents=True, exist_ok=True)
     env.update({"HOME": str(home), "XDG_DATA_HOME": str(case / "xdg"), "MINDUSTRY_DATA_DIR": str(case / "profile")})
+    # Windows uses APPDATA before Vars applies mindustry.data.dir (logger/Intel GPU marker).
+    if platform.system() == "Windows": env.update({"APPDATA":str(case / "profile/appdata"),"LOCALAPPDATA":str(case / "profile/local-appdata")})
     return env
 
 def java_command(main, case, *app_args, extra_flags=()):
@@ -261,9 +263,9 @@ def no_xinput_fixture():
     save(fixture / "provenance.json", {"url":url,"sourceSha256":expected,"configure":configure,"librarySha256":hashlib.sha256(library.read_bytes()).hexdigest(),"scope":"Fault-injected real SDL build ONLY, not the shipping native library"})
     return library.parent
 
-def game_smoke(name, base_env, wayland=False, system_sdl=False):
+def game_smoke(name, base_env, wayland=False, system_sdl=False, recovery=False, restart=False, shared_profile=None):
     case = OUT / name
-    profile = case / "profile"
+    profile = shared_profile or case / "profile"
     target = profile / "mods/BuildWheel"
     target.mkdir(parents=True, exist_ok=True)
     lock = read_result(ROOT / "tests/platform/source-lock.json")
@@ -275,11 +277,13 @@ def game_smoke(name, base_env, wayland=False, system_sdl=False):
     env.update({k: v for k, v in base_env.items() if k in {"DISPLAY","LIBGL_ALWAYS_SOFTWARE","GALLIUM_DRIVER","XDG_RUNTIME_DIR","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER"}})
     if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
     flags = ["-Dmindustry.data.dir=" + str(profile), "-Dnodiscord=true"]
+    if recovery: flags.append("-Dbuildwheel.smoke.recovery=true")
+    if restart: flags.append("-Dbuildwheel.smoke.restart=true")
     if system_sdl: flags.append("-DSDL2_STATIC=1")
     command = java_command("GameSmoke", case, case, "3", extra_flags=flags)
     execution = capture(command, case / "process.log", env=env, cwd=case, timeout=150)
     record(name, "REAL_FULL_GAME_SMOKE", execution, read_result(case / "game-smoke-result.json"),
-           "Actual DesktopLauncher, unmodified BuildWheel, native GL and real assets; default editor only")
+           "Actual DesktopLauncher, BuildWheel, native GL and real assets; editor with " + ("persisted malformed settings and byte-preserved library" if recovery else "factory settings"))
 
 def startup_tests():
     for scenario, locale in [("factory","en"),("factory","ru"),("relative-saved","en"),
@@ -369,6 +373,8 @@ try:
                 native_case("native-wayland-raw-forced-warp", wayland, "forced-warp", wayland=True, system_sdl=True, raw_sdl=True)
                 game_smoke("full-game-wayland-system-editor", wayland, wayland=True, system_sdl=True)
         game_smoke("full-game-default-editor", graphics)
+        game_smoke("full-game-malformed-editor", graphics, recovery=True)
+        game_smoke("full-game-malformed-restart-editor", graphics, recovery=True, restart=True, shared_profile=OUT / "full-game-malformed-editor/profile")
 except Exception as exc:
     import traceback
     (OUT / "orchestrator-error.log").write_text(traceback.format_exc(),encoding="utf-8")
