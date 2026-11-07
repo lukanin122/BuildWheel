@@ -1084,7 +1084,7 @@ exports.create = function(api) {
         isRebinding: function() { // main.js оставляет ввод новой клавиши штатному диалогу игры.
             if (bindingModal != null && bindingModal.isShown()) return true; // Плашка открыта собственной кнопкой мода.
             if (!Core.scene.hasDialog() || Vars.ui.controls == null) return false; // В игре без окон нет ни отражения, ни дополнительного поиска.
-            if (nativeRebindField == null) { nativeRebindField = java.lang.Class.forName("mindustry.ui.dialogs.KeybindDialog").getDeclaredField("rebindDialog"); nativeRebindField.setAccessible(true); } // Поле базового класса подходит и модифицированному наследнику меню управления; ищем его один раз.
+            if (nativeRebindField == null) { nativeRebindField = Vars.ui.controls.getClass().getClassLoader().loadClass("mindustry.ui.dialogs.KeybindDialog").getDeclaredField("rebindDialog"); nativeRebindField.setAccessible(true); } // Берём загрузчик игры: Class.forName из Rhino на ART может искать только в boot classpath; поле базового класса подходит и наследнику.
             var nativeModal = nativeRebindField.get(Vars.ui.controls); // Та же плашка могла быть открыта из стандартного раздела «Управление».
             return nativeModal != null && nativeModal.isShown(); // Назначение через ванильное меню также не должно запускать палитру или колесо.
         },
