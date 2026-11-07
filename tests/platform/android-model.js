@@ -7,7 +7,7 @@ var fixtureBoundary = fixtureSource.indexOf("var initialProcessors =");
 if (fixtureBoundary < 0) throw new Error("Startup fixture boundary changed");
 Packages.rhino.Context.getCurrentContext().evaluateString(this, fixtureSource.substring(0, fixtureBoundary), "reused-android-startup-fixture.js", 1);
 Fonts.def = labelStyle.font; // Palette text caches use the same mock font as the fixture's real labels.
-Styles.emptyTogglei = imageStyle; Styles.togglet = textStyle; Styles.noBarPane = paneStyle; // Additional stock styles normally supplied by UI.load for the browser.
+Styles.emptyTogglei = imageStyle; Styles.togglet = textStyle; Styles.grayt = textStyle; Styles.noBarPane = paneStyle; // Additional stock styles normally supplied by UI.load for native controls/browser.
 var texFields = java.lang.Class.forName("mindustry.gen.Tex").getFields();
 for (var texField = 0; texField < texFields.length; texField++) {
     if (String(texFields[texField].getType().getName()).indexOf("Drawable") >= 0 && texFields[texField].get(null) == null) texFields[texField].set(null, drawable);
@@ -112,6 +112,13 @@ for (var size = 0; size < sizes.length; size++) {
     closeUi();
 }
 settingsApi.show(1); H.drain(); var editor = Core.scene.getDialog();
+var previousNativeControls = Vars.ui.controls;
+Vars.ui.controls = new Packages.mindustry.ui.dialogs.KeybindDialog(); // Real game class/loader and real protected field, rather than a fixture-shaped object.
+H.assertTrue(!settingsApi.isRebinding(), "native rebind lookup through the game classloader accepts a null modal");
+var nativeModal = new Dialog("Native rebind fixture"), nativeField = Vars.ui.controls.getClass().getDeclaredField("rebindDialog");
+nativeField.setAccessible(true); nativeField.set(Vars.ui.controls, nativeModal); nativeModal.show();
+H.assertTrue(settingsApi.isRebinding(), "native rebind lookup reads the actual KeybindDialog protected field");
+nativeModal.hide(); settle(); nativeField.set(Vars.ui.controls, null); Vars.ui.controls = previousNativeControls;
 editor.find("buildwheel-save-browser").fireClick(); H.drain();
 var openedBrowser = Core.scene.getDialog(), browserList = openedBrowser == null ? null : openedBrowser.find("buildwheel-saves-list");
 H.assertTrue(openedBrowser != null && String(openedBrowser.name) === "buildwheel-saves" && browserList != null, "existing wheel browser opens with Android storage branch; top=" + (openedBrowser == null ? "null" : String(openedBrowser.name)) + ", list=" + browserList);
