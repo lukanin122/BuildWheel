@@ -173,11 +173,13 @@ exports.create = function(api) {
         }
         for (var s = 0; s < loadedSlotCount; s++) { // Восстанавливаем видимые и скрытые блоки с их собственными масштабами.
             var key = slotKey(w, s); // генерирует персональные текстовые адреса каждому сектору
-            var savedName = String(Core.settings.getString(key + ".block", "")); //проверяем сохранененные адреса и при наличии вытягиваем те блоки из Core.settings
+            var savedName = ""; // Неверный тип имени оставляет пустым только этот слот, не прерывая загрузку остальных настроек.
+            try { savedName = String(Core.settings.getString(key + ".block", "")); } catch (error) {} //проверяем сохранененные адреса и при наличии вытягиваем те блоки из Core.settings
             if (savedName.length > 0) {// Если мод с блоком удалён, content.block вернёт null: слот пуст.
                 api.setBlock(w, s, Vars.content.block(savedName)); // Через функцию main.js вставляем в колесо блок через адрес найденный в игре
             }
-            var scale = Number(Core.settings.getFloat(key + ".scale", 1)); // Читаем параметр размера в Java Float как число JS; при отсутствии настройки берём 1.
+            var scale = 1; // Неверный тип масштаба не удаляет сохранённый блок и не затрагивает соседние слоты.
+            try { scale = Number(Core.settings.getFloat(key + ".scale", 1)); } catch (error) {} // Читаем параметр размера в Java Float как число JS; при отсутствии настройки берём 1.
             iconScales[w][s] = isFinite(scale) ? Math.max(0.4, Math.min(2, scale)) : 1; // Ограничиваем 40–200%; для NaN/бесконечности используем 100%.
         }
     }
