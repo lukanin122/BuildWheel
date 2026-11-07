@@ -15,7 +15,7 @@
     function key(code, down) { H.key(code, down); }
     function tap(code) { key(code, true); key(code, false); }
     function chord(code) { key(AndroidKey.KEYCODE_CTRL_LEFT, true); key(code, true); key(code, false); key(AndroidKey.KEYCODE_CTRL_LEFT, false); }
-    function computer(enabled) { Core.settings.put("keyboard", enabled); Vars.control.setInput(enabled ? new desktop() : new mobile()); }
+    function computer(enabled) { Core.settings.put("keyboard", enabled); Vars.control.setInput(enabled ? new desktop() : new mobile()); Core.input.setUseKeyboard(enabled); }
     function physical(point, action, button) { H.mouse(point.x, point.y, action, button == null ? 0 : button); }
     function pressPoint(point) { physical(point, Motion.ACTION_DOWN, Motion.BUTTON_PRIMARY); physical(point, Motion.ACTION_UP, 0); }
     function at(element, relativeX, relativeY) { return element.localToStageCoordinates(new Vec2(element.getWidth() * relativeX, element.getHeight() * relativeY)); }

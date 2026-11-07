@@ -309,6 +309,24 @@ def input_order_diagnostic():
     record("input-order-diagnostic", "REAL_ARC_INPUT_WITH_MODELED_SDL", execution, read_result(case / "startup-result.json"),
            "Known F-02 must reproduce: real SdlInput/queue/unchanged main, modeled post-pump SDL accumulator and JNI packets. Not native-OS input proof or a fix.")
 
+def android_models():
+    # Real host JVM/Rhino/UI/files; Android handlers and Os are explicitly modeled.
+    for scenario in ("factory", "user-settings", "user-settings-restart"):
+        name = "android-model-" + scenario
+        data = OUT / ("android-model-data-" + scenario.replace("-restart", ""))
+        data.mkdir(exist_ok=True)
+        command = java_command("StartupHarness", data, JAR, ROOT, data, scenario, "en", "tests/platform/android-model.js")
+        execution = capture(command, OUT / (name + ".log"), env=environment(data), timeout=90)
+        result = read_result(data / "startup-result.json")
+        save(OUT / (name + ".json"), result)
+        record(name, "HOST_MODELED_ANDROID", execution, result, "Android handlers/API21 Os modeled; host Rhino/UI/isolated files real. Not ART or Google Play Games proof.")
+    case = OUT / "android-ctrl-model"
+    case.mkdir(exist_ok=True)
+    command = java_command("AndroidCtrlModel", case, ROOT, case)
+    execution = capture(command, case / "process.log", env=environment(case), timeout=60)
+    record("android-ctrl-model", "HOST_MODELED_ANDROID_CTRL", execution, read_result(case / "android-ctrl-model-result.json"),
+           "Production function with real Rhino/JavaAdapter/Synchronizer/reflection; Android key queue and KeyEvent modeled.")
+
 def setup():
     expected = os.environ.get("EXPECTED_MACHINE")
     if expected and platform.machine() != expected: raise RuntimeError("Wrong runner CPU: " + platform.machine() + " expected " + expected)
@@ -349,7 +367,8 @@ def summarize():
     lines += ["", "A successful GitHub job is not whole-platform certification. Zero received deltas are inconclusive.",
               "F02_INFORMATION_LOSS_REPRODUCED records an unresolved modeled input limitation; it is not a fixed/native input guarantee.",
               "Malformed settings must now recover; forced/automatic warp must be rejected. Failures are never ignored.",
-              "Only the test branch contains these fixes and infrastructure. Production hashes are pinned to the reviewed runtime revision.", ""]
+              "HOST_MODELED_ANDROID results do not certify Android/ART or Google Play Games. The separate emulator job tests actual Android components.",
+              "Changes remain on the authorized test/feature branches. Production hashes are pinned to the reviewed runtime revision.", ""]
     text = "\n".join(lines)
     (OUT / "SUMMARY.md").write_text(text, encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -360,6 +379,7 @@ try:
     if not ARGS.prepare_only:
         startup_tests()
         input_order_diagnostic()
+        android_models()
         graphics = setup_graphics()
         native_case("native-backend-only", graphics, "backend-only")
         native_case("native-normal", graphics)
@@ -402,6 +422,8 @@ bad = any((r["execution"].get("exit",0) != 0 or str(r["classification"]).startsw
 for r in RESULTS:
     if r["group"] == "REAL_JVM_MOCK_GRAPHICS_STARTUP" and not str(r["classification"]).startswith("PASS_"): bad = True
     if r["test"] == "input-order-diagnostic" and r["classification"] != "F02_INFORMATION_LOSS_REPRODUCED": bad = True
+    if r["group"] == "HOST_MODELED_ANDROID" and r["classification"] != "PASS_ANDROID_MODEL": bad = True
+    if r["group"] == "HOST_MODELED_ANDROID_CTRL" and r["classification"] != "PASS_HOST_ANDROID_CTRL_MODEL": bad = True
     if r["test"] == "native-forced-warp" and r["classification"] != "SAFE_REFUSAL_WARP_POLICY": bad = True
     if r["test"] == "native-x11-automatic-warp" and r["classification"] != "SAFE_REFUSAL_XINPUT2_UNAVAILABLE": bad = True
     if r["test"] == "native-normal" and r["classification"] not in {"COMPONENT_LIFECYCLE_EXECUTED","COMPONENT_EXECUTED_WITH_ENVIRONMENT_LIMITATIONS"}: bad = True
