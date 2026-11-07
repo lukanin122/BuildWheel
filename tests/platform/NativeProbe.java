@@ -3,6 +3,9 @@ import arc.backend.sdl.*;
 import arc.backend.sdl.jni.SDL;
 import arc.files.Fi;
 import arc.math.geom.Vec2;
+import arc.mock.MockApplication;
+import arc.mock.MockGraphics;
+import arc.struct.Seq;
 import arc.util.I18NBundle;
 import rhino.*;
 import java.lang.invoke.MethodHandle;
@@ -30,6 +33,7 @@ public final class NativeProbe implements ApplicationListener {
     static Scriptable scope, module;
     static String scenario="normal";
     static double motionSeconds=4;
+    static final boolean rawSdl=Boolean.getBoolean("buildwheel.probe.raw-sdl");
     static final Map<String,Object> report=new LinkedHashMap<>();
     static final List<Map<String,Object>> checks=new ArrayList<>();
     static long processStart=System.nanoTime();
@@ -54,18 +58,19 @@ public final class NativeProbe implements ApplicationListener {
         if(args.length>4) motionSeconds=Double.parseDouble(args[4]);
         if(!(motionSeconds>=0.5 && motionSeconds<=15)) throw new IllegalArgumentException("motion-seconds must be 0.5..15");
         Files.createDirectories(data);
-        report.put("schema",2);report.put("kind","LIVE_TARGET_ARC_SDL_COMPONENT_PROBE");
+        report.put("schema",2);report.put("kind",rawSdl?"LIVE_TARGET_RAW_SDL_ADAPTER_COMPONENT_PROBE":"LIVE_TARGET_ARC_SDL_COMPONENT_PROBE");
+        report.put("rawSDLWindow",rawSdl);report.put("graphicsFacade",rawSdl);
         report.put("os",System.getProperty("os.name"));report.put("arch",System.getProperty("os.arch"));
         report.put("java",System.getProperty("java.version"));report.put("scenario",scenario);report.put("pid",ProcessHandle.current().pid());
         report.put("jarSha256",sha(Files.readAllBytes(jar)));report.put("adapterSha256",sha(Files.readAllBytes(mod.resolve("scripts/sdl-relative.js"))));
         report.put("checks",checks);report.put("cycles",new ArrayList<>());
-        report.put("scope","Real JNI library loading, Arc window/GL, FFM symbols and unchanged SDL adapter. No complete Mindustry game, HUD, physical mouse, or graphical correctness certification.");
+        report.put("scope",rawSdl?"RAW_SDL_COMPONENT_ONLY: real JNI SDL window/GL context/events/FFM and real SdlInput with MockGraphics dimensions facade. Arc SdlApplication/SdlGraphics and GLEW deliberately bypassed. Does not demonstrate actual Arc backend or full-game compatibility.":"Real JNI library loading, Arc window/GL, FFM symbols and unchanged SDL adapter. No complete Mindustry game, HUD, physical mouse, or graphical correctness certification.");
         report.put("classification","RUNNING");write();
         SdlConfig config=new SdlConfig();config.width=800;config.height=600;
         config.title="BuildWheel isolated native probe";config.disableAudio=true;config.vSyncEnabled=true;
         cx=Context.enter();cx.setLanguageVersion(Context.VERSION_ES6);cx.setOptimizationLevel(9);
         try {
-            new SdlApplication(new NativeProbe(),config);
+            if(rawSdl)new RawSdlApplication(new NativeProbe(),config);else new SdlApplication(new NativeProbe(),config);
             if("RUNNING".equals(report.get("classification"))) {
                 report.put("classification","INFRASTRUCTURE_EARLY_APPLICATION_EXIT");write();
             }
@@ -92,8 +97,8 @@ public final class NativeProbe implements ApplicationListener {
                 module=(Scriptable)factory.call(cx,scope,scope,new Object[0]);
             }
             int[] version=new int[3];SDL.SDL_GetVersion(version);report.put("SDL_version",List.of(version[0],version[1],version[2]));
-            report.put("window",Long.toHexString(((SdlApplication)Core.app).getWindow()));
-            report.put("gl",String.valueOf(Core.graphics.getGLVersion()));
+            report.put("window",Long.toHexString(window()));
+            report.put("gl",rawSdl?"NOT_QUERIED: real SDL_GL_CreateContext handle, no SdlGraphics/GLEW":String.valueOf(Core.graphics.getGLVersion()));
             report.put("arcInput",Core.input.getClass().getName());report.put("dimensions",dimensions());
             event("window-created",state());marker("window-ready.json",state());
             try {prepareNative();}
@@ -153,7 +158,7 @@ public final class NativeProbe implements ApplicationListener {
         functions.put("windowPosition",ffi.bind(pointers.get("SDL_GetWindowPosition"),null,"ADDRESS","ADDRESS","ADDRESS"));
         functions.put("hint",ffi.bind(pointers.get("SDL_GetHintBoolean"),"JAVA_INT","ADDRESS","JAVA_INT"));
         long current=ffi.address(invoke("current"));
-        if(current!=((SdlApplication)Core.app).getWindow() || current==0) throw new IllegalStateException("SDL GL current window does not match Arc; no native mode mutation permitted");
+        if(current!=window() || current==0) throw new IllegalStateException("SDL GL current window does not match this probe's window; no native mode mutation permitted");
         report.put("verifiedCurrentWindow",Long.toHexString(current));
         report.put("FFM_symbolsAndWindowVerified",true);
         report.put("SDL_driver",ffi.string(invoke("driver"),64));
@@ -243,7 +248,7 @@ public final class NativeProbe implements ApplicationListener {
                 case "minimized":
                     if(elapsed(phaseStart)>.6) {
                         Map<String,Object> minimized=state();report.put("minimizedState",minimized);
-                        boolean focused=(SDL.SDL_GetWindowFlags(((SdlApplication)Core.app).getWindow())&SDL.SDL_WINDOW_INPUT_FOCUS)!=0;
+                        boolean focused=(SDL.SDL_GetWindowFlags(window())&SDL.SDL_WINDOW_INPUT_FOCUS)!=0;
                         if(minimizeBegan) {
                             boolean sampled=Boolean.TRUE.equals(call(adapter,"sample",Context.javaToJS(delta,scope)));
                             if(!focused)check("active-minimize-stops-and-releases",!sampled && mode()==0 && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",state());
@@ -255,8 +260,8 @@ public final class NativeProbe implements ApplicationListener {
                         check("unfocused-begin-refused",!began,focused?"INFRASTRUCTURE_WINDOW_MANAGER_LIMITATION":"CONFIRMED_COMPONENT_DEFECT",minimized);
                         if(focused) check("minimize-produced-focus-loss",false,"INFRASTRUCTURE_WINDOW_MANAGER_LIMITATION",minimized);
                         if(began){probeOwnsMode=true;call(adapter,"end");}
-                        SDL.SDL_RestoreWindow(((SdlApplication)Core.app).getWindow());
-                        invoke("raise",ffi.ofAddress(((SdlApplication)Core.app).getWindow()));setPhase("restored");
+                        SDL.SDL_RestoreWindow(window());
+                        invoke("raise",ffi.ofAddress(window()));setPhase("restored");
                     }
                     break;
                 case "restored":
@@ -357,14 +362,14 @@ public final class NativeProbe implements ApplicationListener {
 
     void resize() throws Throwable {
         widthBefore=Core.graphics.getWidth();heightBefore=Core.graphics.getHeight();
-        SDL.SDL_SetWindowSize(((SdlApplication)Core.app).getWindow(),720,520);
+        SDL.SDL_SetWindowSize(window(),720,520);
         event("requested-resize",state());
     }
     void minimize() throws Throwable {
         minimizeBegan=Boolean.TRUE.equals(call(adapter,"begin"));
         if(minimizeBegan)probeOwnsMode=true;
         check("begin-before-minimize",minimizeBegan,"SAFE_REFUSAL_FOCUS_OR_NATIVE",state());
-        SDL.SDL_MinimizeWindow(((SdlApplication)Core.app).getWindow());event("requested-minimize",state());
+        SDL.SDL_MinimizeWindow(window());event("requested-minimize",state());
     }
     public void pause(){event("arc-pause",safeState());}
     public void resume(){event("arc-resume",safeState());}
@@ -419,7 +424,7 @@ public final class NativeProbe implements ApplicationListener {
 
     Map<String,Object> dimensions(){return Map.of("logicalWidth",Core.graphics.getWidth(),"logicalHeight",Core.graphics.getHeight(),"backBufferWidth",Core.graphics.getBackBufferWidth(),"backBufferHeight",Core.graphics.getBackBufferHeight(),"density",Core.graphics.getDensity());}
     Map<String,Object> state() throws Throwable {
-        Map<String,Object> out=new LinkedHashMap<>();long window=((SdlApplication)Core.app).getWindow();
+        Map<String,Object> out=new LinkedHashMap<>();long window=window();
         out.put("phase",phase);out.put("elapsed",elapsed(processStart));out.put("flags",SDL.SDL_GetWindowFlags(window));out.put("pid",ProcessHandle.current().pid());out.putAll(dimensions());
         out.put("arcMouseX",Core.input.mouseX());out.put("arcMouseY",Core.input.mouseY());out.put("SDL_error",String.valueOf(SDL.SDL_GetError()));
         if(ffi!=null && functions.containsKey("mode")) {
@@ -444,6 +449,115 @@ public final class NativeProbe implements ApplicationListener {
         if(v instanceof Map){StringJoiner j=new StringJoiner(",","{","}");for(var e:((Map<?,?>)v).entrySet())j.add(json(String.valueOf(e.getKey()))+":"+json(e.getValue()));return j.toString();}
         if(v instanceof Iterable){StringJoiner j=new StringJoiner(",","[","]");for(Object item:(Iterable<?>)v)j.add(json(item));return j.toString();}
         StringBuilder s=new StringBuilder("\"");for(char c:String.valueOf(v).toCharArray()){switch(c){case '\\':s.append("\\\\");break;case '"':s.append("\\\"");break;case '\n':s.append("\\n");break;case '\r':s.append("\\r");break;case '\t':s.append("\\t");break;default:if(c<32)s.append(String.format("\\u%04x",(int)c));else s.append(c);}}return s.append('"').toString();
+    }
+
+    static long window(){return Core.app instanceof RawSdlApplication?((RawSdlApplication)Core.app).getWindow():((SdlApplication)Core.app).getWindow();}
+
+    /**
+     * Diagnostic escape hatch for SDL/FFM testing when Arc's GLEW initialization fails.
+     * This is intentionally a facade, not an alternative game backend or an Arc compatibility pass.
+     * SDL window, GL context, events, relative mode and SdlInput are real; no simulated movement is added.
+     */
+    public static final class RawSdlApplication extends MockApplication {
+        final Thread mainThread=Thread.currentThread();
+        final Seq<ApplicationListener> listeners=new Seq<>();
+        final java.util.concurrent.ConcurrentLinkedQueue<Runnable> posted=new java.util.concurrent.ConcurrentLinkedQueue<>();
+        boolean running=true;
+        long window,context;
+        Ffm cleanupFfm;
+        MethodHandle deleteContext;
+        final RawSdlGraphics graphics=new RawSdlGraphics();
+        public RawSdlApplication(NativeProbe listener,SdlConfig config)throws Throwable {
+            if(!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("linux"))throw new UnsupportedOperationException("raw-sdl diagnostic is confined to Linux");
+            Core.app=this;Core.files=new SdlFiles();Core.settings=new Settings();Core.graphics=graphics;
+            listeners.add(listener);
+            boolean initAttempted=false;
+            try {
+                initAttempted=true;
+                int result=SDL.SDL_Init(SDL.SDL_INIT_VIDEO|SDL.SDL_INIT_EVENTS);
+                report.put("rawSDLInitReturn",result);
+                if(result!=0)throw new IllegalStateException("Raw SDL_Init failed: "+SDL.SDL_GetError());
+                SDL.SDL_GL_SetAttribute(SDL.SDL_GL_CONTEXT_MAJOR_VERSION,2);
+                SDL.SDL_GL_SetAttribute(SDL.SDL_GL_CONTEXT_MINOR_VERSION,0);
+                SDL.SDL_GL_SetAttribute(SDL.SDL_GL_DOUBLEBUFFER,1);
+                window=SDL.SDL_CreateWindow(config.title,config.width,config.height,SDL.SDL_WINDOW_OPENGL|SDL.SDL_WINDOW_SHOWN|SDL.SDL_WINDOW_RESIZABLE|SDL.SDL_WINDOW_ALLOW_HIGHDPI);
+                if(window==0)throw new IllegalStateException("Raw SDL_CreateWindow failed: "+SDL.SDL_GetError());
+                context=SDL.SDL_GL_CreateContext(window);
+                if(context==0)throw new IllegalStateException("Raw SDL_GL_CreateContext failed: "+SDL.SDL_GetError());
+                report.put("rawGLContext",Long.toHexString(context));
+                report.put("rawSwapIntervalReturn",SDL.SDL_GL_SetSwapInterval(1));
+                graphics.width=config.width;graphics.height=config.height;graphics.refresh(window);
+                Core.input=new SdlInput();
+                Method handle=SdlInput.class.getDeclaredMethod("handleInput",int[].class),update=SdlInput.class.getDeclaredMethod("update"),postUpdate=SdlInput.class.getDeclaredMethod("postUpdate");
+                handle.setAccessible(true);update.setAccessible(true);postUpdate.setAccessible(true);
+                // Arc JNI has no GL_DeleteContext binding. Verify its public SDL export before using it at teardown.
+                cleanupFfm=new Ffm();
+                Object current=cleanupFfm.symbol("SDL_GL_GetCurrentWindow"),destroy=cleanupFfm.symbol("SDL_GL_DeleteContext");
+                String maps=Files.readString(Path.of("/proc/self/maps"));
+                if(!listener.linuxImage(maps,cleanupFfm.address(current)).equals(listener.linuxImage(maps,cleanupFfm.address(destroy))))throw new IllegalStateException("Raw GL teardown symbol belongs to another SDL image");
+                if(cleanupFfm.address(cleanupFfm.bind(current,"ADDRESS").invokeWithArguments())!=window)throw new IllegalStateException("Raw GL context does not belong to the JNI-created window");
+                deleteContext=cleanupFfm.bind(destroy,null,"ADDRESS");
+                for(ApplicationListener item:listeners.copy())item.init();
+                report.put("rawEventLoopEntered",true);report.put("rawInputForwarding","Actual SDL_PollEvent -> actual SdlInput.handleInput/update/postUpdate; no synthetic SDL events");
+                int[] event=new int[64];long allEvents=0,motionEvents=0,windowEvents=0;
+                while(running) {
+                    while(SDL.SDL_PollEvent(event)) {
+                        allEvents++;
+                        if(event[0]==SDL.SDL_EVENT_QUIT){running=false;continue;}
+                        if(event[0]==SDL.SDL_EVENT_WINDOW) {
+                            windowEvents++;
+                            if(event[1]==SDL.SDL_WINDOWEVENT_RESIZED || event[1]==SDL.SDL_WINDOWEVENT_SIZE_CHANGED) {
+                                graphics.width=event[2];graphics.height=event[3];graphics.refresh(window);
+                                for(ApplicationListener item:listeners.copy())item.resize(graphics.getWidth(),graphics.getHeight());
+                            }
+                            if(event[1]==SDL.SDL_WINDOWEVENT_FOCUS_LOST)for(ApplicationListener item:listeners.copy())item.pause();
+                            if(event[1]==SDL.SDL_WINDOWEVENT_FOCUS_GAINED)for(ApplicationListener item:listeners.copy())item.resume();
+                            if(event[1]==SDL.SDL_WINDOWEVENT_CLOSE)running=false;
+                        }else if(event[0]==SDL.SDL_EVENT_MOUSE_MOTION || event[0]==SDL.SDL_EVENT_MOUSE_BUTTON || event[0]==SDL.SDL_EVENT_MOUSE_WHEEL || event[0]==SDL.SDL_EVENT_KEYBOARD || event[0]==SDL.SDL_EVENT_TEXT_INPUT || event[0]==SDL.SDL_EVENT_TEXT_EDIT) {
+                            if(event[0]==SDL.SDL_EVENT_MOUSE_MOTION)motionEvents++;
+                            handle.invoke(Core.input,(Object)event);
+                        }
+                    }
+                    if(!running)break;
+                    graphics.refresh(window);graphics.updateTime();graphics.incrementFrameId();update.invoke(Core.input);defaultUpdate();
+                    for(ApplicationListener item:listeners.copy())item.update();
+                    Runnable task;while((task=posted.poll())!=null)task.run();
+                    SDL.SDL_GL_SwapWindow(window);postUpdate.invoke(Core.input);
+                    Thread.sleep(4);
+                }
+                report.put("rawEventCounts",Map.of("all",allEvents,"mouseMotion",motionEvents,"window",windowEvents));
+            }finally {
+                Map<String,Object> teardown=new LinkedHashMap<>();
+                for(ApplicationListener item:listeners.copy()) {
+                    try{item.pause();}catch(Throwable t){teardown.put("pauseException",trace(t));}
+                    try{item.dispose();}catch(Throwable t){teardown.put("disposeException",trace(t));}
+                }
+                if(context!=0 && cleanupFfm!=null && deleteContext!=null) {
+                    try{deleteContext.invokeWithArguments(cleanupFfm.ofAddress(context));teardown.put("GL_DeleteContextCalled",true);context=0;}
+                    catch(Throwable t){teardown.put("GL_DeleteContextException",trace(t));}
+                }
+                if(cleanupFfm!=null)try{cleanupFfm.close();teardown.put("probeCleanupArenaClosed",true);}catch(Throwable t){teardown.put("arenaException",trace(t));}
+                if(window!=0)try{SDL.SDL_DestroyWindow(window);teardown.put("SDL_DestroyWindowCalled",true);window=0;}catch(Throwable t){teardown.put("windowException",trace(t));}
+                if(initAttempted)try{SDL.SDL_Quit();teardown.put("SDL_QuitCalled",true);}catch(Throwable t){teardown.put("quitException",trace(t));}
+                report.put("rawTeardown",teardown);write();
+            }
+        }
+        public long getWindow(){return window;}
+        public Thread getMainThread(){return mainThread;}
+        public Application.ApplicationType getType(){return Application.ApplicationType.desktop;}
+        public Seq<ApplicationListener> getListeners(){return listeners;}
+        public void post(Runnable task){posted.add(task);}
+        public void exit(){running=false;}
+    }
+    public static final class RawSdlGraphics extends MockGraphics {
+        int width=800,height=600;
+        final int[] drawable=new int[2];
+        void refresh(long window){SDL.SDL_GL_GetDrawableSize(window,drawable);}
+        public int getWidth(){return width;}
+        public int getHeight(){return height;}
+        public int getBackBufferWidth(){return drawable[0];}
+        public int getBackBufferHeight(){return drawable[1];}
+        public float getDensity(){return 1;}
     }
 
     /** Reflection keeps the probe source compatible with javac 17; the actual native execution requires Java 25. */

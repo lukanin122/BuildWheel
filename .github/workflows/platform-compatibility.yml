@@ -47,7 +47,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsdl2-2.0-0 xvfb openbox xdotool x11-utils mesa-utils libgl1-mesa-dri libegl1 libgles2 weston wayland-utils dbus-x11
+          sudo apt-get install -y --no-install-recommends libsdl2-2.0-0 xvfb openbox xdotool xinput x11-utils mesa-utils libgl1-mesa-dri libegl1 libgles2 weston wayland-utils dbus-x11
       - name: Execute isolated platform tests
         env:
           EXPECTED_MACHINE: ${{ matrix.machine }}

@@ -109,6 +109,8 @@ def setup_graphics():
         start_service(["openbox"], "openbox", env)
         time.sleep(.8)
         capture(["glxinfo", "-B"], OUT / "glxinfo.log", env)
+        capture(["xinput", "list", "--long"], OUT / "xinput-devices.log", env)
+        start_service(["stdbuf", "-oL", "xinput", "test-xi2", "--root"], "xinput-events", env)
         return env
     if IS_MAC:
         capture(["sh", "-c", "printf 'show State:/Users/ConsoleUser\\n' | scutil"], OUT / "console-user.log")
@@ -166,28 +168,30 @@ def inject(env, proc, case, mode, wayland=False):
                             ["xdotool", "mousemove", "--window", window, "400", "300"],
                             ["xdotool", "click", "1"]]
             else:
-                for x, y in [(430,310),(450,330),(420,300),(445,315)]:
-                    commands.append(["xdotool", "mousemove", "--window", window, str(x), str(y)])
+                for dx, dy in [(24,8),(-12,-4),(16,6),(-28,-10)]:
+                    commands.append(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
             values = []
             for command in commands:
                 r = subprocess.run(command, env=env, capture_output=True, text=True, timeout=4)
                 values.append({"command": command, "exit": r.returncode, "stderr": r.stderr[-500:]})
                 if mode != "prepare": time.sleep(.04)
-            value = {"source": "XTest -> Weston -> Wayland" if wayland else "XTest -> X11", "mode": mode, "window": window, "calls": values}
+            value = {"source": "XTest relative -> Weston -> Wayland" if wayland else "XTest relative -> X11", "mode": mode, "window": window, "calls": values}
         else: return
         with logfile.open("a", encoding="utf-8") as stream:
+            value["timestamp"] = time.time()
             stream.write(json.dumps(value) + "\n")
     except Exception as exc:
         with logfile.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"injectionError": str(exc)}) + "\n")
 
-def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=False):
+def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=False, raw_sdl=False):
     case = OUT / name
     case.mkdir(exist_ok=True)
     env = environment(case)
     env.update({k: v for k, v in base_env.items() if k in {"DISPLAY","LIBGL_ALWAYS_SOFTWARE","GALLIUM_DRIVER","XDG_RUNTIME_DIR","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER"}})
     if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
     flags = ["-DSDL2_STATIC=1"] if system_sdl else []
+    if raw_sdl: flags.append("-Dbuildwheel.probe.raw-sdl=true")
     command = java_command("NativeProbe", case, JAR, ROOT, case, scenario, "3", extra_flags=flags)
     save(case / "launch.json", {"command": command, "environment": {k: env.get(k) for k in ["DISPLAY","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER","XDG_RUNTIME_DIR"]}, "systemSDL": system_sdl})
     started = time.monotonic()
@@ -213,8 +217,8 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
             time.sleep(.1)
         execution = {"exit": p.wait(), "seconds": round(time.monotonic()-started,2), "timeout": timed_out}
     report = read_result(case / "native-probe-result.json")
-    record(name, "REAL_NATIVE_COMPONENT", execution, report,
-           "Synthetic OS input through actual SDL; no physical-device or whole-mod certification")
+    record(name, "REAL_SDL_FFM_WITH_GRAPHICS_FACADE" if raw_sdl else "REAL_NATIVE_COMPONENT", execution, report,
+           "Actual SDL window/context/events and FFM; mock graphics dimensions bypass Arc GLEW only in this standalone component test, not in the game" if raw_sdl else "Synthetic OS input through actual SDL; no physical-device or whole-mod certification")
     if IS_LINUX:
         capture(["xprop", "-root", "_NET_ACTIVE_WINDOW"], case / "x-focus-after.log", base_env, timeout=5)
 
@@ -317,6 +321,9 @@ try:
                 native_case("native-wayland-system-backend-only", wayland, "backend-only", wayland=True, system_sdl=True)
                 native_case("native-wayland-system-normal", wayland, wayland=True, system_sdl=True)
                 native_case("native-wayland-system-forced-warp", wayland, "forced-warp", wayland=True, system_sdl=True)
+                native_case("native-wayland-raw-backend-only", wayland, "backend-only", wayland=True, system_sdl=True, raw_sdl=True)
+                native_case("native-wayland-raw-normal", wayland, wayland=True, system_sdl=True, raw_sdl=True)
+                native_case("native-wayland-raw-forced-warp", wayland, "forced-warp", wayland=True, system_sdl=True, raw_sdl=True)
                 game_smoke("full-game-wayland-system-editor", wayland, wayland=True, system_sdl=True)
         game_smoke("full-game-default-editor", graphics)
 except Exception as exc:
