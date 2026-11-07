@@ -46,6 +46,7 @@ public final class BuildWheelAndroidProbe {
             write("BOOTSTRAP_EXTERNAL_DIRECTORY_READY", null);
             return; // Host installs verified mod bytes after the app created its package directory.
         }
+        activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE); // Test the requested computer window, not the device's natural portrait orientation.
         Thread.UncaughtExceptionHandler prior = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
             fail(error.toString());

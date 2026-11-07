@@ -82,6 +82,11 @@ def app_collect(remote: str, destination: Path):
         result = subprocess.run(["adb", "exec-out", "run-as", PACKAGE, "cat", remote + "/" + name],
                                 capture_output=True, timeout=90)
         if result.returncode == 0:
+            if name.endswith(".png") and not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+                continue  # adb exec-out can return zero for a remote cat failure.
+            if name.endswith(".json"):
+                try: json.loads(result.stdout)
+                except (UnicodeDecodeError, json.JSONDecodeError): continue
             (destination / name).write_bytes(result.stdout)
 
 
@@ -147,7 +152,7 @@ def prepare(output: Path, supplied_jar: Path | None):
     provenance = {
         "mindustry_commit": SOURCE, "arc_revision": ARC, "source_archive_sha256": source_sha,
         "release_assets_jar_sha256": jar_sha, "source_ref": "v160.7",
-        "test_only_upstream_changes": ["AndroidLauncher probe registration/private staging/external mod copy/bootstrap-only early return", "probe Java class and JS asset",
+        "test_only_upstream_changes": ["AndroidLauncher probe registration/private staging/external mod copy/bootstrap-only early return", "probe Java class and JS asset; Activity landscape orientation for computer-window tests",
             "Gradle wrapper 9.3.1 -> 8.2.1 for AGP 8.2.2", "mergeDebugNativeLibs depends on copyAndroidNatives"],
         "runtime_mod_changes": [], "java": subprocess.run(["java", "-version"], capture_output=True, text=True).stderr,
         "scope": "Actual Android APK and emulator; not Google Play Games or a stock signed release APK",

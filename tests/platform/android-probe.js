@@ -8,7 +8,7 @@
     var frames = 0, next = 0, actions = [], editor = null, preview = null, beforeLibrary;
     var desktop = Packages.mindustry.input.DesktopInput, mobile = Packages.mindustry.input.MobileInput;
     function check(value, message) { H.check(!!value, message); }
-    function step(action, delay) { actions.push({action: action, delay: delay == null ? 12 : delay}); }
+    function step(action, delay) { actions.push({action: action, delay: delay == null ? 24 : delay}); }
     function find(name) { var e = Core.scene.root.find(name); check(e != null, "Actual Android widget exists: " + name); return e; }
     function click(name) { find(name).fireClick(); }
     function closeDialogs() { for (var i = 0; i < 12 && Core.scene.getDialog() != null; i++) Core.scene.getDialog().hide(); }
@@ -16,6 +16,14 @@
     function tap(code) { key(code, true); key(code, false); }
     function chord(code) { key(AndroidKey.KEYCODE_CTRL_LEFT, true); key(code, true); key(code, false); key(AndroidKey.KEYCODE_CTRL_LEFT, false); }
     function computer(enabled) { Core.settings.put("keyboard", enabled); Vars.control.setInput(enabled ? new desktop() : new mobile()); Core.input.setUseKeyboard(enabled); }
+    function createWorld() {
+        Vars.logic.reset(); Vars.state.rules = Packages.mindustry.game.Gamemode.sandbox.apply(new Rules());
+        var tags = new Packages.arc.struct.StringMap(); tags.put("name", "BuildWheel Android fixture"); Vars.state.map = new Packages.mindustry.maps.Map(tags);
+        Vars.state.map.width = Vars.state.map.height = 48;
+        Vars.world.loadGenerator(48, 48, function(tiles) { tiles.fill(); for (var x = 0; x < 48; x++) for (var y = 0; y < 48; y++) tiles.get(x, y).setFloor(Blocks.stone); tiles.get(24, 24).setBlock(Blocks.coreShard, Team.sharded, 0); });
+        Vars.logic.play(); Vars.player.team(Team.sharded);
+        var unit = UnitTypes.alpha.create(Team.sharded); unit.set(24 * Vars.tilesize, 24 * Vars.tilesize); unit.add(); Vars.player.unit(unit);
+    }
     function physical(point, action, button) { H.mouse(point.x, point.y, action, button == null ? 0 : button); }
     function pressPoint(point) { physical(point, Motion.ACTION_DOWN, Motion.BUTTON_PRIMARY); physical(point, Motion.ACTION_UP, 0); }
     function at(element, relativeX, relativeY) { return element.localToStageCoordinates(new Vec2(element.getWidth() * relativeX, element.getHeight() * relativeY)); }
@@ -86,7 +94,7 @@
         beforeLibrary = String(originalProfile.child("buildwheel/library.json").readString("UTF-8"));
     } catch (error) { H.fail(String(error)); return; }
 
-    step(function() { closeDialogs(); computer(false); check(!menu.computerInputActive(), "MobileInput disables BuildWheel computer actions"); });
+    step(function() { closeDialogs(); createWorld(); computer(false); check(!menu.computerInputActive(), "MobileInput disables BuildWheel computer actions"); });
     step(function() { chord(AndroidKey.KEYCODE_MINUS); });
     step(function() { check(Core.scene.getDialog() == null, "MobileInput chord did not open editor"); computer(true); });
     step(function() { check(menu.computerInputActive() && Vars.mobile, "DesktopInput switch enabled mod without changing Vars.mobile"); chord(AndroidKey.KEYCODE_MINUS); });
@@ -111,12 +119,6 @@
         click("buildwheel-back");
     });
     step(function() {
-        Vars.logic.reset(); Vars.state.rules = Packages.mindustry.game.Gamemode.sandbox.apply(new Rules());
-        var tags = new Packages.arc.struct.StringMap(); tags.put("name", "BuildWheel Android fixture"); Vars.state.map = new Packages.mindustry.maps.Map(tags);
-        Vars.state.map.width = Vars.state.map.height = 48;
-        Vars.world.loadGenerator(48, 48, function(tiles) { tiles.fill(); for (var x = 0; x < 48; x++) for (var y = 0; y < 48; y++) tiles.get(x, y).setFloor(Blocks.stone); tiles.get(24, 24).setBlock(Blocks.coreShard, Team.sharded, 0); });
-        Vars.logic.play(); Vars.player.team(Team.sharded);
-        var unit = UnitTypes.alpha.create(Team.sharded); unit.set(24 * Vars.tilesize, 24 * Vars.tilesize); unit.add(); Vars.player.unit(unit);
         closeDialogs(); controls.set("edgeShift", 0); controls.set("relativeMouse", false); controls.set("clipOuter", false); controls.set("clipInner", false);
         physical(new Vec2(Core.scene.getWidth() / 2, Core.scene.getHeight() / 2), Motion.ACTION_HOVER_MOVE);
     }, 30);
