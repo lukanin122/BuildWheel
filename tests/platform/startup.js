@@ -131,7 +131,7 @@ if (preservationProfile) {
         changeRecord("buildwheel.slot.1.0.scale", text("1.7")); expectedSlots[0].scale = 1;
     }
     if (profile === "malformed-mixed") {
-        changeRecord("buildwheel.slot.1.1.scale", text("1.7")); expectedSlots[1].scale = 1;
+        changeRecord("buildwheel.slot.1.1.scale", text("1")); expectedSlots[1].scale = 1; // The exact String value previously used to reproduce F-01.
         changeRecord("buildwheel.slot.1.2.scale", floating("NaN")); expectedSlots[2].scale = 1;
         changeRecord("buildwheel.slot.1.3.scale", floating("Infinity")); expectedSlots[3].scale = 1;
         changeRecord("buildwheel.slot.1.4.scale", floating("-Infinity")); expectedSlots[4].scale = 1;
