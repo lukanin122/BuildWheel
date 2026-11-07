@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,28 @@ def adb(*args, check=True):
     if check and completed.returncode:
         raise RuntimeError(f"adb {' '.join(map(str,args))}: {completed.stderr.strip()}")
     return completed.stdout
+
+
+def app_write(source: Path, destination: str):
+    # Android 11 scoped storage reserves package-directory creation for the app.
+    # The disposable debuggable APK created it in bootstrap; run-as preserves UID.
+    script = "mkdir -p " + shlex.quote(str(Path(destination).parent)) + " && cat > " + shlex.quote(destination)
+    command = "run-as " + shlex.quote(PACKAGE) + " sh -c " + shlex.quote(script)
+    payload = source.read_bytes()
+    result = subprocess.run(["adb", "shell", "-T", command], input=payload, capture_output=True, timeout=90)
+    if result.returncode:
+        raise RuntimeError("run-as runtime file write failed: " + result.stderr.decode("utf-8", "replace"))
+    verified = subprocess.run(["adb", "exec-out", "run-as", PACKAGE, "cat", destination], capture_output=True, timeout=90)
+    if verified.returncode or verified.stdout != payload:
+        raise RuntimeError("Android runtime file differs after transfer: " + str(source))
+
+
+def app_collect(remote: str, destination: Path):
+    for name in ("result.json", "editor.png", "palette.png", "browser.png", "wheel.png"):
+        result = subprocess.run(["adb", "exec-out", "run-as", PACKAGE, "cat", remote + "/" + name],
+                                capture_output=True, timeout=90)
+        if result.returncode == 0:
+            (destination / name).write_bytes(result.stdout)
 
 
 def prepare(output: Path, supplied_jar: Path | None):
@@ -151,7 +174,25 @@ def run(output: Path):
     })
     adb("install", "-r", output / "Mindustry-probe.apk")
     adb("shell", "pm", "clear", PACKAGE)  # This is the newly installed disposable AVD app only.
-    adb("shell", "mkdir", "-p", EXTERNAL + "/mods/BuildWheel")
+    # Ask Context.getExternalFilesDir to create the package root. ADB mkdir at
+    # Android/data is forbidden on API30 even when shell can access existing files.
+    adb("shell", "am", "start", "-W", "-n", PACKAGE + "/mindustry.android.AndroidLauncher",
+        "--es", "buildwheel.probe.stage", "bootstrap")
+    bootstrap = None
+    for attempt in range(30):
+        raw = adb("shell", "run-as", PACKAGE, "cat", EXTERNAL + "/buildwheel-android-results/bootstrap/result.json", check=False)
+        try:
+            candidate = json.loads(raw)
+            if candidate.get("status") == "BOOTSTRAP_EXTERNAL_DIRECTORY_READY":
+                bootstrap = candidate
+                break
+        except json.JSONDecodeError:
+            pass
+        time.sleep(1)
+    if bootstrap is None:
+        raise RuntimeError("Debug APK could not create its own external directory; bootstrap/run-as unavailable")
+    json_write(output / "android-bootstrap.json", bootstrap)
+    adb("shell", "am", "force-stop", PACKAGE)
     manifest = json.loads((ROOT / "tests/platform/source-lock.json").read_text(encoding="utf-8"))
     copied = {}
     for relative, expected in manifest["files"].items():
@@ -161,8 +202,7 @@ def run(output: Path):
         if actual != expected:
             raise RuntimeError(f"Runtime source-lock mismatch: {relative}")
         destination = EXTERNAL + "/mods/BuildWheel/" + relative
-        adb("shell", "mkdir", "-p", str(Path(destination).parent))
-        adb("push", source, destination)
+        app_write(source, destination)
         copied[relative] = actual
     json_write(output / "android-runtime-source-hashes.json", copied)
     outcomes = []
@@ -183,7 +223,7 @@ def run(output: Path):
         remote = EXTERNAL + f"/buildwheel-android-results/{stage}"
         result = None
         while time.monotonic() - started < 260:
-            raw = adb("shell", "cat", remote + "/result.json", check=False)
+            raw = adb("shell", "run-as", PACKAGE, "cat", remote + "/result.json", check=False)
             try:
                 candidate = json.loads(raw)
                 if candidate.get("status") != "STARTING":
@@ -193,7 +233,7 @@ def run(output: Path):
                 pass
             time.sleep(2)
         (stage_output / "logcat.txt").write_text(adb("logcat", "-d", "-v", "threadtime"), encoding="utf-8")
-        adb("pull", remote + "/.", stage_output, check=False)
+        app_collect(remote, stage_output)
         adb("shell", "screencap", "-p", "/sdcard/buildwheel-screen.png")
         adb("pull", "/sdcard/buildwheel-screen.png", stage_output / "android-screen.png", check=False)
         adb("shell", "am", "force-stop", PACKAGE)

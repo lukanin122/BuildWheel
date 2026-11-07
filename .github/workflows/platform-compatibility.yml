@@ -133,6 +133,7 @@ jobs:
             ${{ runner.temp }}/buildwheel-android-results/*-context.json
             ${{ runner.temp }}/buildwheel-android-results/*-summary.json
             ${{ runner.temp }}/buildwheel-android-results/*-hashes.json
+            ${{ runner.temp }}/buildwheel-android-results/android-bootstrap.json
             ${{ runner.temp }}/buildwheel-android-results/*.log
             ${{ runner.temp }}/buildwheel-android-results/initial/
             ${{ runner.temp }}/buildwheel-android-results/restart-1600/

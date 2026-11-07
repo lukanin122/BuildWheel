@@ -41,6 +41,10 @@ public final class BuildWheelAndroidProbe {
         output = new Fi(launcher.getExternalFilesDir(null)).child("buildwheel-android-results").child(stage);
         output.mkdirs();
         started = System.nanoTime();
+        if ("bootstrap".equals(stage)) {
+            write("BOOTSTRAP_EXTERNAL_DIRECTORY_READY", null);
+            return; // Host installs verified mod bytes after the app created its package directory.
+        }
         Thread.UncaughtExceptionHandler prior = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
             fail(error.toString());
