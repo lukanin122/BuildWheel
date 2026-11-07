@@ -4,7 +4,7 @@ displayName: "Build Wheel"
 
 author: "[#666999[]]Name[#CC0000[]]less[#FFFF00[]]Ways"
 
-version: "1.0.1-alpha"
+version: "1.0.2-alpha"
 
 minGameVersion: "160.7"
 
