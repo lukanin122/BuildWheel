@@ -388,6 +388,7 @@ Events.on(ClientLoadEvent, () => {
 
     function closeForGameAction(key) {
         if (key == KeyCode.unset) return false;
+        if (OS.isAndroid && key == KeyCode.escape) { closeWheel(); return true; } // На Android Binding.menu по умолчанию Back; компьютерный Escape тоже отменяет колесо, сохраняя назначенный Back.
         for (var i = 0; i < closingBindings.length; i++) {
             var binding = closingBindings[i];
             if (binding.value != null && binding.value.key == key) {
