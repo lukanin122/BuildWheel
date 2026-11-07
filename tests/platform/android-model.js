@@ -71,6 +71,10 @@ function clickNorth() {
     H.assertTrue(mux.touchUp(Math.round(point.x), Math.round(point.y), 0, KeyCode.mouseLeft), "matching wheel release consumed");
 }
 inGame = true; slotApi.setBlock(1, 0, fixtureBlocks["fixture-copper"]);
+var originalMenuAxis = Binding.menu.value; Binding.menu.value = new KeyBind.Axis(KeyCode.back); // Match the real Android default even though the host JVM is desktop.
+openWheel(); mainProcessor.keyDown(KeyCode.escape); H.assertTrue(!wheel.visible, "Android desktop Escape cancels wheel when game menu is Back");
+openWheel(); mainProcessor.keyDown(KeyCode.back); H.assertTrue(!wheel.visible, "Android assigned Back still cancels wheel");
+Binding.menu.value = originalMenuAxis;
 openWheel(); clickNorth(); H.drain();
 H.assertTrue(!wheel.visible && Vars.control.input.block === fixtureBlocks["fixture-copper"], "ordinary absolute click selected the correct block despite saved native options");
 openWheel(0, 0);
