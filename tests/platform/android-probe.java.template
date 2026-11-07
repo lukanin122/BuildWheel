@@ -38,10 +38,11 @@ public final class BuildWheelAndroidProbe {
         activity = launcher;
         stage = launcher.getIntent().getStringExtra("buildwheel.probe.stage");
         if (stage == null) stage = "initial";
-        output = new Fi(launcher.getExternalFilesDir(null)).child("buildwheel-android-results").child(stage);
+        output = new Fi(launcher.getFilesDir()).child("buildwheel-android-results").child(stage);
         output.mkdirs();
         started = System.nanoTime();
         if ("bootstrap".equals(stage)) {
+            launcher.getExternalFilesDir(null); // The app creates its external package directory through the supported Context API.
             write("BOOTSTRAP_EXTERNAL_DIRECTORY_READY", null);
             return; // Host installs verified mod bytes after the app created its package directory.
         }
@@ -50,6 +51,26 @@ public final class BuildWheelAndroidProbe {
             fail(error.toString());
             if (prior != null) prior.uncaughtException(thread, error);
         });
+        try {
+            // Do not rely on run-as access to the external-storage mount namespace.
+            // Stage bytes privately; the real app installs them into its normal
+            // external mods directory before the unmodified game loader starts.
+            java.io.File target = new java.io.File(launcher.getExternalFilesDir(null), "mods/BuildWheel");
+            try (var input = new java.util.zip.ZipInputStream(new java.io.FileInputStream(new java.io.File(launcher.getFilesDir(), "buildwheel-runtime.zip")))) {
+                byte[] buffer = new byte[8192]; java.util.zip.ZipEntry entry;
+                while ((entry = input.getNextEntry()) != null) {
+                    String name = entry.getName();
+                    if (name.startsWith("/") || name.contains("..") || name.contains("\\")) throw new java.io.IOException("Unsafe mod archive entry");
+                    if (entry.isDirectory()) continue;
+                    java.io.File file = new java.io.File(target, name), parent = file.getParentFile();
+                    if (!parent.mkdirs() && !parent.isDirectory()) throw new java.io.IOException("Cannot create mod directory");
+                    try (var stream = new java.io.FileOutputStream(file)) {
+                        int count; while ((count = input.read(buffer)) != -1) stream.write(buffer, 0, count);
+                    }
+                    input.closeEntry();
+                }
+            }
+        } catch (Throwable error) { fail("Test runtime installation: " + error); return; }
         Events.on(ClientLoadEvent.class, event -> Core.app.post(() -> Core.app.post(() -> {
             try {
                 Core.app.addListener(new ApplicationListener() {
@@ -68,6 +89,7 @@ public final class BuildWheelAndroidProbe {
     }
 
     public static String stage() { return stage; }
+    public static boolean isBootstrap() { return "bootstrap".equals(stage); }
     public static boolean done() { return completed; }
 
     public static void check(boolean condition, String message) {

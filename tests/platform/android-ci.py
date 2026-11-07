@@ -25,7 +25,7 @@ SOURCE = "17012d61d9e4c3cbd9820d87e81c24495486ac53"  # Mindustry v160.7
 ARC = "7445105cd2"
 JAR_SHA = "36d94941a1639478ad1d9be25a9d802c6f77552f400c6da0338b7b019f63a0d1"
 PACKAGE = "io.anuke.mindustry"
-EXTERNAL = f"/sdcard/Android/data/{PACKAGE}/files"
+APPFILES = "files"  # run-as changes cwd to the package's private data directory.
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -65,8 +65,7 @@ def adb(*args, check=True):
 
 
 def app_write(source: Path, destination: str):
-    # Android 11 scoped storage reserves package-directory creation for the app.
-    # The disposable debuggable APK created it in bootstrap; run-as preserves UID.
+    # Use debuggable private storage; only the app accesses its external namespace.
     script = "mkdir -p " + shlex.quote(str(Path(destination).parent)) + " && cat > " + shlex.quote(destination)
     command = "run-as " + shlex.quote(PACKAGE) + " sh -c " + shlex.quote(script)
     payload = source.read_bytes()
@@ -127,7 +126,7 @@ def prepare(output: Path, supplied_jar: Path | None):
     anchor = "        initialize(new ClientLauncher(){"
     if text.count(anchor) != 1:
         raise RuntimeError("Pinned Android launcher hook anchor is not unique")
-    launcher.write_text(text.replace(anchor, "        BuildWheelAndroidProbe.install(this);\n\n" + anchor), encoding="utf-8")
+    launcher.write_text(text.replace(anchor, "        BuildWheelAndroidProbe.install(this);\n        if (BuildWheelAndroidProbe.isBootstrap()) return;\n\n" + anchor), encoding="utf-8")
     shutil.copyfile(ROOT / "tests/platform/android-probe.java.template", launcher.parent / "BuildWheelAndroidProbe.java")
     asset_dir = source_dir / "android/assets"
     asset_dir.mkdir(parents=True, exist_ok=True)
@@ -148,7 +147,7 @@ def prepare(output: Path, supplied_jar: Path | None):
     provenance = {
         "mindustry_commit": SOURCE, "arc_revision": ARC, "source_archive_sha256": source_sha,
         "release_assets_jar_sha256": jar_sha, "source_ref": "v160.7",
-        "test_only_upstream_changes": ["AndroidLauncher ClientLoad probe registration", "probe Java class and JS asset",
+        "test_only_upstream_changes": ["AndroidLauncher probe registration/private staging/external mod copy/bootstrap-only early return", "probe Java class and JS asset",
             "Gradle wrapper 9.3.1 -> 8.2.1 for AGP 8.2.2", "mergeDebugNativeLibs depends on copyAndroidNatives"],
         "runtime_mod_changes": [], "java": subprocess.run(["java", "-version"], capture_output=True, text=True).stderr,
         "scope": "Actual Android APK and emulator; not Google Play Games or a stock signed release APK",
@@ -180,7 +179,7 @@ def run(output: Path):
         "--es", "buildwheel.probe.stage", "bootstrap")
     bootstrap = None
     for attempt in range(30):
-        raw = adb("shell", "run-as", PACKAGE, "cat", EXTERNAL + "/buildwheel-android-results/bootstrap/result.json", check=False)
+        raw = adb("shell", "run-as", PACKAGE, "cat", APPFILES + "/buildwheel-android-results/bootstrap/result.json", check=False)
         try:
             candidate = json.loads(raw)
             if candidate.get("status") == "BOOTSTRAP_EXTERNAL_DIRECTORY_READY":
@@ -195,15 +194,18 @@ def run(output: Path):
     adb("shell", "am", "force-stop", PACKAGE)
     manifest = json.loads((ROOT / "tests/platform/source-lock.json").read_text(encoding="utf-8"))
     copied = {}
+    payload = output / "buildwheel-runtime.zip"
+    archive = zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED)
     for relative, expected in manifest["files"].items():
         source = ROOT / relative
         # CI Linux checkout is exactly the committed Git blob representation.
         actual = hashlib.sha256(source.read_bytes()).hexdigest()
         if actual != expected:
             raise RuntimeError(f"Runtime source-lock mismatch: {relative}")
-        destination = EXTERNAL + "/mods/BuildWheel/" + relative
-        app_write(source, destination)
+        archive.write(source, relative)
         copied[relative] = actual
+    archive.close()
+    app_write(payload, APPFILES + "/buildwheel-runtime.zip")
     json_write(output / "android-runtime-source-hashes.json", copied)
     outcomes = []
     for stage, width, height in [("initial", 1280, 720), ("restart-1600", 1600, 900), ("restart-1920", 1920, 1080)]:
@@ -220,7 +222,7 @@ def run(output: Path):
         adb("shell", "am", "start", "-W", "-n", PACKAGE + "/mindustry.android.AndroidLauncher",
             "--es", "buildwheel.probe.stage", stage)
         started = time.monotonic()
-        remote = EXTERNAL + f"/buildwheel-android-results/{stage}"
+        remote = APPFILES + f"/buildwheel-android-results/{stage}"
         result = None
         while time.monotonic() - started < 260:
             raw = adb("shell", "run-as", PACKAGE, "cat", remote + "/result.json", check=False)
@@ -264,6 +266,17 @@ def main():
         else:
             run(output)
     except Exception as error:
+        if arguments.operation == "run":
+            for name, cmd in {
+                "failure-logcat.log": ["logcat", "-d", "-v", "threadtime"],
+                "failure-package.log": ["shell", "dumpsys", "package", PACKAGE],
+                "failure-run-as.log": ["shell", "run-as", PACKAGE, "ls", "-lR", "files"],
+            }.items():
+                try:
+                    diagnostic = subprocess.run(["adb", *cmd], capture_output=True, timeout=90)
+                    (output / name).write_bytes(diagnostic.stdout + b"\nSTDERR:\n" + diagnostic.stderr)
+                except Exception as diagnostic_error:
+                    (output / name).write_text(repr(diagnostic_error), encoding="utf-8")
         json_write(output / f"{arguments.operation}-failure.json", {
             "status": "BUILD_OR_INFRASTRUCTURE_FAILURE" if arguments.operation == "prepare" else "ANDROID_EXECUTION_FAILURE",
             "error": repr(error), "production_runtime_was_not_modified_by_fixture": True})

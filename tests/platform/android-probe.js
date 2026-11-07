@@ -112,7 +112,9 @@
     });
     step(function() {
         Vars.logic.reset(); Vars.state.rules = Packages.mindustry.game.Gamemode.sandbox.apply(new Rules());
-        Vars.world.loadGenerator(48, 48, function(tiles) { for (var x = 0; x < 48; x++) for (var y = 0; y < 48; y++) tiles.get(x, y).setFloor(Blocks.stone); tiles.get(24, 24).setBlock(Blocks.coreShard, Team.sharded, 0); });
+        var tags = new Packages.arc.struct.StringMap(); tags.put("name", "BuildWheel Android fixture"); Vars.state.map = new Packages.mindustry.maps.Map(tags);
+        Vars.state.map.width = Vars.state.map.height = 48;
+        Vars.world.loadGenerator(48, 48, function(tiles) { tiles.fill(); for (var x = 0; x < 48; x++) for (var y = 0; y < 48; y++) tiles.get(x, y).setFloor(Blocks.stone); tiles.get(24, 24).setBlock(Blocks.coreShard, Team.sharded, 0); });
         Vars.logic.play(); Vars.player.team(Team.sharded);
         var unit = UnitTypes.alpha.create(Team.sharded); unit.set(24 * Vars.tilesize, 24 * Vars.tilesize); unit.add(); Vars.player.unit(unit);
         closeDialogs(); controls.set("edgeShift", 0); controls.set("relativeMouse", false); controls.set("clipOuter", false); controls.set("clipInner", false);
