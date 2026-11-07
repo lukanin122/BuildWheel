@@ -1,0 +1,65 @@
+name: BuildWheel platform compatibility
+on:
+  push:
+    branches:
+      - test/platform-compatibility
+    paths:
+      - .github/workflows/platform-compatibility.yml
+      - tests/platform/**
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: buildwheel-platform-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native:
+    if: github.ref == 'refs/heads/test/platform-compatibility'
+    name: ${{ matrix.name }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 x64
+            runner: ubuntu-24.04
+            arch: x64
+            machine: x86_64
+          - name: macOS 15 Intel x64
+            runner: macos-15-intel
+            arch: x64
+            machine: x86_64
+          - name: macOS 15 ARM64
+            runner: macos-15
+            arch: aarch64
+            machine: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          architecture: ${{ matrix.arch }}
+      - name: Install Linux graphical test environment
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-2.0-0 xvfb openbox xdotool x11-utils mesa-utils libgl1-mesa-dri libegl1 libgles2 weston wayland-utils dbus-x11
+      - name: Execute isolated platform tests
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+          PLATFORM_LABEL: ${{ matrix.name }}
+        run: python3 tests/platform/run.py --output "$RUNNER_TEMP/buildwheel-platform-results"
+      - name: Save native diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildwheel-${{ matrix.runner }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/buildwheel-platform-results
+            !${{ runner.temp }}/buildwheel-platform-results/Mindustry.jar
+          if-no-files-found: warn
+          retention-days: 14

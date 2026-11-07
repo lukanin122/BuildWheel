@@ -1,0 +1,31 @@
+{
+  "source_commit": "3ed6ea53608c47882f7983e57d2dce4ab5029dda",
+  "files": {
+    "bundles/bundle.properties": "03a4a39e03a5f306bbf2e647a2f4f0467ffaf396e94b3a4b33a1ac8fd3f037c6",
+    "bundles/bundle_ru.properties": "f3ac38884df5f7bd6551b1f605f23c331ad46effc1b17e7cd8463c92bb45078e",
+    "mod.hjson": "6628fbef968cbaf7dea20201de744849611981ed204bab0c39d9728a6a9fd153",
+    "scripts/appearance-menu.js": "d4e7ca505b48e7074632e12068cdd900bac9a874e4535a61a8c9cb3442db74b4",
+    "scripts/main.js": "02920cec4eda5d8a919ab579719bddd5686597600c9167fb7d675ebe2c83a015",
+    "scripts/menu.js": "c374165f5b49b8b1e503f94357a9a515e635d7b0d7c7b40a103d1e0c70031ce3",
+    "scripts/palette.js": "23ebbeef4c022338e48e3b56efc3cd6c5c1f464ddf07208f6c96c19776ff0743",
+    "scripts/sdl-relative.js": "0c2b9032ba1d777cc163cfe42bf7f4283afa0611466dad3c75796b825ca41966",
+    "scripts/sounds.js": "dc9097148ff2f1cdaa20351294f7051a3a0f72d53fcfef75f32e526f451baa63",
+    "scripts/wheel-browser.js": "20dbc0878c8afde6de9c7c6eaa09c7527b1ef4c24c4a384bae1d16555d8a1be0",
+    "scripts/wheel-library.js": "2f21e9f7745ebb3059005d19f2551e14c5ce504819bdee49bd86fb87c716729b",
+    "scripts/wheel-snapshots.js": "ada07de0d20f7ac1aef712322bbbdcd13f354a4f0fbd6aaba986fd475ae056f4",
+    "scripts/wheel.js": "35a1f08ff64b2d1aba9cf838841f69050bf280a538efc0154782264f0fec2af9",
+    "sounds/add_block_1.ogg": "d21d0f0b782445db579d11e2506b24cd1ac9d664ee33aeaf807761aa7b6fd710",
+    "sounds/delete_block_1.ogg": "e9f4db1dc84927b877ef170af9524c6603225045a894a859629edcafa1006b81",
+    "sounds/mouseclick1.ogg": "ece1210c62ccae6c9ea4f4c59466d9d453d6b357c7d4b1a6c31196e5e6fea1bf",
+    "sounds/mouserelease1.ogg": "23cb78cea76d8f1bb1266af228101a09b5d62063f4ac87ead15b1d395c6181f0",
+    "sounds/sector_hover_1.ogg": "75dc2ecec9e043185a44404d5d289d2cc9b9a28cfb56d3ee44818e10ea0ecf98",
+    "sounds/sector_hover_2.ogg": "87210d4690c4d90753a54d87c7c97133033f2fb3b8f0ffab6c07a85755bec000",
+    "sounds/sector_select_1.ogg": "25faa57a3e819a3e3a2191934226e540467fcd11680131a7a77b47271048327e",
+    "sounds/wheel_number_1.ogg": "b2923ed170e963b5e211bf73e75f8eeb41f6b49a46eb52f3b3fc43234c713a16",
+    "sounds/wheel_number_2.ogg": "8b70e47aa1d51d220a3609a02cc50ceed6e05a20f51c6f8daaf5fd83eae42cf3",
+    "sounds/wheel_number_3.ogg": "3e1805b914a66e63695913d19ba98c5ec584cc69d29c7167d83c460ab752a5d3",
+    "sounds/wheel_open_1.ogg": "e89564d153d0629359e23bfe72d7cae65bdf8885b70484bff0a5daa76d1246b4",
+    "sprites/icon_color.png": "47e43daca0688ad50a948f5a1fc1bee6eb4cbea919709878775ad147fb1f0e8f",
+    "sprites/icon_wheel.png": "0c3837411ac3ec239974aaf45db506ccc72664ecb5cfbec0d79de356b10bd869"
+  }
+}
