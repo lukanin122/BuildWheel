@@ -18,7 +18,7 @@ import java.util.zip.ZipFile;
  * Runs the unmodified mod module graph with the game's Rhino and Arc widgets.
  * Graphics/audio/window state are fixtures; this is not a native SDL or game-play test.
  * All Settings writes go to the explicitly supplied disposable directory.
- * CLI: StartupHarness <desktop.jar> <repo> <data-dir> [scenario] [locale]
+ * CLI: StartupHarness <desktop.jar> <repo> <data-dir> [scenario] [locale] [entry-script]
  */
 public final class StartupHarness {
     static Context context;
@@ -152,7 +152,7 @@ public final class StartupHarness {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 3) throw new IllegalArgumentException(
-            "StartupHarness <desktop.jar> <repo> <data-dir> [scenario] [locale]");
+            "StartupHarness <desktop.jar> <repo> <data-dir> [scenario] [locale] [entry-script]");
         Path repository = Path.of(args[1]).toAbsolutePath().normalize();
         scripts = repository.resolve("scripts");
         dataDirectory = Path.of(args[2]).toAbsolutePath().normalize();
@@ -183,7 +183,7 @@ public final class StartupHarness {
                  InputStream stream = jar.getInputStream(jar.getEntry("scripts/global.js"))) {
                 context.evaluateString(scope, new String(stream.readAllBytes(), StandardCharsets.UTF_8), "scripts/global.js", 1);
             }
-            Path test = repository.resolve("tests/platform/startup.js");
+            Path test = repository.resolve(args.length > 5 ? args[5] : "tests/platform/startup.js").normalize();
             context.evaluateString(scope, Files.readString(test), test.toString(), 1);
             if (!resultWritten) throw new IllegalStateException("Script did not record a classified result");
         } catch (Throwable error) {

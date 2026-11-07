@@ -301,6 +301,14 @@ def startup_tests():
         save(OUT / (name + ".json"), result)
         record(name, "REAL_JVM_MOCK_GRAPHICS_STARTUP", execution, result, "Real target JVM/Rhino/widgets, mocked window/graphics/audio; not native-game proof")
 
+def input_order_diagnostic():
+    case = OUT / "input-order-diagnostic"
+    case.mkdir(exist_ok=True)
+    command = java_command("StartupHarness", case, JAR, ROOT, case, "factory", "en", "tests/platform/input-order.js")
+    execution = capture(command, case / "process.log", env=environment(case), timeout=90)
+    record("input-order-diagnostic", "REAL_ARC_INPUT_WITH_MODELED_SDL", execution, read_result(case / "startup-result.json"),
+           "Known F-02 must reproduce: real SdlInput/queue/unchanged main, modeled post-pump SDL accumulator and JNI packets. Not native-OS input proof or a fix.")
+
 def setup():
     expected = os.environ.get("EXPECTED_MACHINE")
     if expected and platform.machine() != expected: raise RuntimeError("Wrong runner CPU: " + platform.machine() + " expected " + expected)
@@ -339,6 +347,7 @@ def summarize():
     for r in RESULTS:
         lines.append("| " + r["test"] + " | " + r["group"] + " | " + str(r["classification"]) + " |")
     lines += ["", "A successful GitHub job is not whole-platform certification. Zero received deltas are inconclusive.",
+              "F02_INFORMATION_LOSS_REPRODUCED records an unresolved modeled input limitation; it is not a fixed/native input guarantee.",
               "Malformed settings must now recover; forced/automatic warp must be rejected. Failures are never ignored.",
               "Only the test branch contains these fixes and infrastructure. Production hashes are pinned to the reviewed runtime revision.", ""]
     text = "\n".join(lines)
@@ -350,6 +359,7 @@ try:
     setup()
     if not ARGS.prepare_only:
         startup_tests()
+        input_order_diagnostic()
         graphics = setup_graphics()
         native_case("native-backend-only", graphics, "backend-only")
         native_case("native-normal", graphics)
@@ -391,6 +401,7 @@ bad = any((r["execution"].get("exit",0) != 0 or str(r["classification"]).startsw
           for r in RESULTS)
 for r in RESULTS:
     if r["group"] == "REAL_JVM_MOCK_GRAPHICS_STARTUP" and not str(r["classification"]).startswith("PASS_"): bad = True
+    if r["test"] == "input-order-diagnostic" and r["classification"] != "F02_INFORMATION_LOSS_REPRODUCED": bad = True
     if r["test"] == "native-forced-warp" and r["classification"] != "SAFE_REFUSAL_WARP_POLICY": bad = True
     if r["test"] == "native-x11-automatic-warp" and r["classification"] != "SAFE_REFUSAL_XINPUT2_UNAVAILABLE": bad = True
     if r["test"] == "native-normal" and r["classification"] not in {"COMPONENT_LIFECYCLE_EXECUTED","COMPONENT_EXECUTED_WITH_ENVIRONMENT_LIMITATIONS"}: bad = True
