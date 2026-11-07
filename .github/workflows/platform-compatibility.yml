@@ -3,9 +3,13 @@ on:
   push:
     branches:
       - test/platform-compatibility
+      - feature/android-desktop-input
     paths:
       - .github/workflows/platform-compatibility.yml
       - tests/platform/**
+      - scripts/**
+      - bundles/**
+      - mod.hjson
   workflow_dispatch:
 permissions:
   contents: read
@@ -14,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   native:
-    if: github.ref == 'refs/heads/test/platform-compatibility'
+    if: github.ref == 'refs/heads/test/platform-compatibility' || github.ref == 'refs/heads/feature/android-desktop-input'
     name: ${{ matrix.name }}
     timeout-minutes: 25
     strategy:
@@ -67,3 +71,54 @@ jobs:
             !${{ runner.temp }}/buildwheel-platform-results/sdl-no-xinput/SDL2-2.0.10.tar.gz
           if-no-files-found: warn
           retention-days: 14
+  android:
+    if: github.ref == 'refs/heads/feature/android-desktop-input'
+    name: Android API 30 x86_64 desktop input
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Android SDK 36 build prerequisites
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Enable KVM for the disposable AVD
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Build test-only actual Android client
+        run: python3 tests/platform/android-ci.py prepare --output "$RUNNER_TEMP/buildwheel-android-results"
+      - name: Actual Android emulator execution
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: python3 tests/platform/android-ci.py run --output "$RUNNER_TEMP/buildwheel-android-results"
+      - name: Save Android diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildwheel-real-android-api30
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/buildwheel-android-results/*-provenance.json
+            ${{ runner.temp }}/buildwheel-android-results/*-failure.json
+            ${{ runner.temp }}/buildwheel-android-results/*-context.json
+            ${{ runner.temp }}/buildwheel-android-results/*-summary.json
+            ${{ runner.temp }}/buildwheel-android-results/*-hashes.json
+            ${{ runner.temp }}/buildwheel-android-results/*.log
+            ${{ runner.temp }}/buildwheel-android-results/initial/
+            ${{ runner.temp }}/buildwheel-android-results/restart-1600/
+            ${{ runner.temp }}/buildwheel-android-results/restart-1920/

@@ -1,0 +1,137 @@
+package mindustry.android;
+
+import android.os.SystemClock;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import arc.ApplicationListener;
+import arc.Core;
+import arc.Events;
+import arc.backend.android.AndroidGraphics;
+import arc.files.Fi;
+import arc.math.geom.Vec2;
+import arc.util.Log;
+import arc.util.ScreenUtils;
+import mindustry.Vars;
+import mindustry.game.EventType.ClientLoadEvent;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/**
+ * Test-only launcher hook copied into an ephemeral upstream Android APK.
+ * The repository's runtime mod is copied byte-for-byte; it is not instrumented.
+ * Inputs below enter the real Android View/AndroidInput queue, not a mock Input.
+ * This is an Android emulator test, never evidence of Google Play Games itself.
+ */
+public final class BuildWheelAndroidProbe {
+    static AndroidLauncher activity;
+    static Fi output;
+    static JSONArray checks = new JSONArray();
+    static JSONArray snapshots = new JSONArray();
+    static String stage;
+    static volatile String dispatchFailure;
+    static volatile boolean completed;
+    static long started;
+
+    public static void install(AndroidLauncher launcher) {
+        activity = launcher;
+        stage = launcher.getIntent().getStringExtra("buildwheel.probe.stage");
+        if (stage == null) stage = "initial";
+        output = new Fi(launcher.getExternalFilesDir(null)).child("buildwheel-android-results").child(stage);
+        output.mkdirs();
+        started = System.nanoTime();
+        Thread.UncaughtExceptionHandler prior = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            fail(error.toString());
+            if (prior != null) prior.uncaughtException(thread, error);
+        });
+        Events.on(ClientLoadEvent.class, event -> Core.app.post(() -> Core.app.post(() -> {
+            try {
+                Core.app.addListener(new ApplicationListener() {
+                    @Override public void update() {
+                        if (!completed && System.nanoTime() - started > 180_000_000_000L)
+                            fail("Android probe exceeded 180 seconds after launch");
+                        if (!completed && dispatchFailure != null) fail(dispatchFailure);
+                    }
+                });
+                var mod = Vars.mods.getMod("buildwheel");
+                check(mod != null && mod.enabled() && !mod.hasContentErrors(), "Actual Android mod loader enabled BuildWheel");
+                Vars.mods.getScripts().run(mod, Core.files.internal("buildwheel-android-probe.js"));
+            } catch (Throwable error) { error.printStackTrace(); fail(error.toString()); }
+        })));
+        write("STARTING", null);
+    }
+
+    public static String stage() { return stage; }
+    public static boolean done() { return completed; }
+
+    public static void check(boolean condition, String message) {
+        try { checks.put(new JSONObject().put("check", message).put("pass", condition)); }
+        catch (Exception error) { throw new RuntimeException(error); }
+        if (!condition) throw new IllegalStateException(message);
+    }
+
+    /** Events are posted to the UI thread and processed by the actual next GL frames. */
+    public static void key(int keyCode, boolean down) {
+        activity.runOnUiThread(() -> {
+            try {
+                View view = ((AndroidGraphics) Core.graphics).getView();
+                view.requestFocus();
+                long time = SystemClock.uptimeMillis();
+                KeyEvent event = new KeyEvent(time, time, down ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
+                    keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD);
+                view.dispatchKeyEvent(event);
+            } catch (Throwable error) { dispatchFailure = error.toString(); }
+        });
+    }
+
+    /** stageToScreenCoordinates has a top-left Y, matching Android MotionEvent. */
+    public static void mouse(float stageX, float stageY, int action, int button) {
+        Vec2 screen = Core.scene.stageToScreenCoordinates(new Vec2(stageX, stageY));
+        activity.runOnUiThread(() -> {
+            MotionEvent event = null;
+            try {
+                View view = ((AndroidGraphics) Core.graphics).getView();
+                MotionEvent.PointerProperties pointer = new MotionEvent.PointerProperties();
+                pointer.id = 0; pointer.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+                MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
+                coords.x = screen.x; coords.y = screen.y; coords.pressure = action == MotionEvent.ACTION_UP ? 0 : 1;
+                coords.size = 1;
+                long now = SystemClock.uptimeMillis();
+                event = MotionEvent.obtain(now, now, action, 1,
+                    new MotionEvent.PointerProperties[]{pointer}, new MotionEvent.PointerCoords[]{coords},
+                    0, button, 1, 1, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+                if (action == MotionEvent.ACTION_HOVER_MOVE) view.dispatchGenericMotionEvent(event);
+                else view.dispatchTouchEvent(event);
+            } catch (Throwable error) { dispatchFailure = error.toString(); }
+            finally { if (event != null) event.recycle(); }
+        });
+    }
+
+    public static void screenshot(String name) {
+        try {
+            ScreenUtils.saveScreenshot(output.child(name + ".png"));
+            snapshots.put(new JSONObject().put("name", name)
+                .put("physicalWidth", Core.graphics.getWidth()).put("physicalHeight", Core.graphics.getHeight())
+                .put("logicalSceneWidth", Core.scene.getWidth()).put("logicalSceneHeight", Core.scene.getHeight())
+                .put("uiScale", arc.scene.ui.layout.Scl.scl()).put("frame", Core.graphics.getFrameId()));
+        } catch (Exception error) { throw new RuntimeException(error); }
+    }
+
+    public static void finish() { completed = true; Core.settings.manualSave(); write("PASS_REAL_ANDROID_COMPONENTS", null); }
+    public static void fail(String error) { completed = true; Log.err("BuildWheel Android probe: @", error); write("ANDROID_TEST_FAILURE", error); }
+
+    static synchronized void write(String status, String error) {
+        if (output == null) return;
+        try {
+            JSONObject value = new JSONObject().put("schema", 1).put("status", status).put("stage", stage)
+                .put("scope", "Real Android runtime, actual game/Arc/Rhino/UI/storage; synthetic View events, not Google Play Games")
+                .put("androidApi", android.os.Build.VERSION.SDK_INT).put("androidRelease", android.os.Build.VERSION.RELEASE)
+                .put("abis", new JSONArray(java.util.Arrays.asList(android.os.Build.SUPPORTED_ABIS)))
+                .put("checks", checks).put("screenshots", snapshots);
+            if (error != null) value.put("error", error);
+            output.child("result.json").writeString(value.toString(2), false, "UTF-8");
+        } catch (Throwable errorWriting) { errorWriting.printStackTrace(); }
+    }
+}
