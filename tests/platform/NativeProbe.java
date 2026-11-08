@@ -48,6 +48,11 @@ public class NativeProbe implements ApplicationListener {
     double sumX, sumY, absMotion;
     boolean done, disposed, probeOwnsMode, initializing=true, minimizeBegan;
     int modeBefore=-1, cursorBefore=-99;
+    Map<String,Object> exitTarget;
+    boolean exitTargetPending;
+    long inputFinishedFrame = -1;
+    boolean globalCursorCalibrated;
+    int globalCursorOffsetX,globalCursorOffsetY;
     List<Map<String,Object>> cycles=new ArrayList<>();
 
     public static void main(String[] args) throws Exception {
@@ -161,6 +166,7 @@ public class NativeProbe implements ApplicationListener {
         if(current!=window() || current==0) throw new IllegalStateException("SDL GL current window does not match this probe's window; no native mode mutation permitted");
         report.put("verifiedCurrentWindow",Long.toHexString(current));
         report.put("FFM_symbolsAndWindowVerified",true);
+        prepareGlobalCursor(os);
         report.put("SDL_driver",ffi.string(invoke("driver"),64));
         modeBefore=mode();cursorBefore=((Number)invoke("cursor",-1)).intValue();
         report.put("modeBefore",modeBefore);report.put("cursorBefore",cursorBefore);
@@ -169,6 +175,57 @@ public class NativeProbe implements ApplicationListener {
         report.put("forcedWarpHintRead",((Number)invoke("hint",ffi.cstring("SDL_MOUSE_RELATIVE_MODE_WARP"),0)).intValue());
         invoke("raise",ffi.ofAddress(current));
         event("verified-native-functions",state());
+    }
+
+    void prepareGlobalCursor(String os) {
+        try {
+            Object pointer=ffi.symbol("SDL_GetGlobalMouseState");
+            if(os.contains("linux")) {
+                String maps=Files.readString(Path.of("/proc/self/maps"));
+                if(!linuxImage(maps,ffi.address(pointer)).equals(linuxImage(maps,ffi.address(pointers.get("SDL_GL_GetCurrentWindow")))))
+                    throw new IllegalStateException("Optional SDL global mouse getter belongs to another executable image");
+            }else if(os.contains("mac")) {
+                MethodHandle describe=ffi.bind(ffi.systemSymbol("dladdr"),"JAVA_INT","ADDRESS","ADDRESS");
+                Object info=ffi.allocate(32,8);
+                Map<String,Object> owner=image(describe,info,pointers.get("SDL_GL_GetCurrentWindow"),"SDL_GL_GetCurrentWindow");
+                Map<String,Object> candidate=image(describe,info,pointer,"SDL_GetGlobalMouseState");
+                if(!owner.get("path").equals(candidate.get("path")) || !owner.get("base").equals(candidate.get("base")))
+                    throw new IllegalStateException("Optional SDL global mouse getter belongs to another Mach-O image");
+            }else throw new UnsupportedOperationException("Global mouse getter verification is Linux/macOS only");
+            functions.put("globalMouse",ffi.bind(pointer,"JAVA_INT","ADDRESS","ADDRESS"));
+            report.put("globalMouseSymbol",Map.of("address",Long.toHexString(ffi.address(pointer)),"sameSDLImageVerified",true));
+        }catch(Throwable unavailable) {report.put("physicalCursorObservationLimitation","SDL_GetGlobalMouseState unavailable or unverified: "+trace(unavailable));}
+    }
+
+    Map<String,Object> globalCursorSnapshot() throws Throwable {
+        Object x=ffi.allocate(4,4),y=ffi.allocate(4,4);
+        int buttons=((Number)invoke("globalMouse",x,y)).intValue(),globalX=ffi.integer(x),globalY=ffi.integer(y);
+        invoke("windowPosition",ffi.ofAddress(window()),x,y);
+        return Map.of("globalX",globalX,"globalY",globalY,"windowX",ffi.integer(x),"windowY",ffi.integer(y),"buttons",buttons);
+    }
+
+    void calibratePhysicalCursor(boolean moved) {
+        try {
+        if(!functions.containsKey("globalMouse"))return;
+        String driver=String.valueOf(report.get("SDL_driver"));
+        if(!moved || (!driver.equals("x11") && !driver.equals("cocoa"))) {
+            report.put("physicalCursorObservationLimitation","No successful absolute warp on a source-verified X11/Cocoa global-coordinate backend; physical endpoint is not certified");return;
+        }
+        Map<String,Object> snapshot=globalCursorSnapshot();
+        int globalX=((Number)snapshot.get("globalX")).intValue(),globalY=((Number)snapshot.get("globalY")).intValue();
+        if((globalX==0 && globalY==0) || Math.abs((long)globalX)>10000000 || Math.abs((long)globalY)>10000000) {
+            report.put("physicalCursorObservationLimitation",Map.of("reason","Global getter returned unsupported/ambiguous coordinates after absolute warp; physical endpoint is not certified","observed",snapshot));return;
+        }
+        int localX=Math.max(0,Math.min(Core.graphics.getWidth()-1,410));
+        int localY=Math.max(0,Math.min(Core.graphics.getHeight()-1,Core.graphics.getHeight()-310));
+        globalCursorOffsetX=globalX-((Number)snapshot.get("windowX")).intValue()-localX;
+        globalCursorOffsetY=globalY-((Number)snapshot.get("windowY")).intValue()-localY;
+        globalCursorCalibrated=true;
+        report.put("physicalCursorCalibration",Map.of("source","Verified SDL_GetGlobalMouseState after known ordinary absolute warp; subsequent distinct cycle endpoints must corroborate it","localSDLX",localX,"localSDLY",localY,"offsetX",globalCursorOffsetX,"offsetY",globalCursorOffsetY,"observed",snapshot));
+        }catch(Throwable unavailable) {
+            globalCursorCalibrated=false;
+            report.put("physicalCursorObservationLimitation","Global getter calibration could not be completed; physical endpoint is not certified: "+trace(unavailable));
+        }
     }
 
     Map<String,Object> image(MethodHandle dladdr,Object memory,Object pointer,String name) throws Throwable {
@@ -231,9 +288,10 @@ public class NativeProbe implements ApplicationListener {
                     break;
                 case "sampling":
                     sample();
-                    if(!done && elapsed(phaseStart)>=motionSeconds) endCycle();
+                    if(!done && elapsed(phaseStart)>=motionSeconds && injectionFinished()) endCycle();
                     break;
                 case "after-cycle":
+                    if(exitTargetPending) verifyExitAfterPump();
                     if(elapsed(phaseStart)>.4) {
                         if(cycle<3) beginCycle();
                         else {resize();setPhase("resized");}
@@ -294,6 +352,7 @@ public class NativeProbe implements ApplicationListener {
         warp=(Scriptable)call(module,"createWarp",adapter);
         report.put("absoluteWarpBefore",state());
         boolean moved=Boolean.TRUE.equals(call(warp,"move",410,310));
+        calibratePhysicalCursor(moved);
         report.put("absoluteWarpReturned",moved);report.put("absoluteWarpImmediate",state());
         String driver=String.valueOf(report.get("SDL_driver"));
         if(driver.equals("wayland"))check("wayland-absolute-warp-refused",!moved,"CONFIRMED_COMPONENT_DEFECT",state());
@@ -328,14 +387,18 @@ public class NativeProbe implements ApplicationListener {
         try {
             boolean began=Boolean.TRUE.equals(call(adapter,"begin"));
             check("refuse-foreign-mode",!began && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",state());
-            boolean ended=Boolean.TRUE.equals(call(adapter,"end"));
-            check("leave-foreign-mode-untouched",ended && mode()==1,"CONFIRMED_COMPONENT_DEFECT",state());
+            Map<String,Object> before=state();
+            boolean ended=Boolean.TRUE.equals(call(adapter,"end",173.4,219.6));
+            Map<String,Object> afterEnd=state();
+            check("leave-foreign-mode-untouched",ended && mode()==1 && !Boolean.TRUE.equals(prop(adapter,"cursorSynced")),"CONFIRMED_COMPONENT_DEFECT",afterEnd);
+            check("foreign-end-target-does-not-move-cursor",sameCursor(before,afterEnd),"CONFIRMED_COMPONENT_DEFECT",Map.of("before",before,"after",afterEnd));
         }finally {cleanupProbeMode();}
         check("foreign-owner-cleanup",mode()==0,"INFRASTRUCTURE_NATIVE_RELEASE_FAILURE",state());
     }
 
     void beginCycle() throws Throwable {
         cycle++;samples=0;nonzero=0;sumX=0;sumY=0;absMotion=0;
+        inputFinishedFrame = -1;
         if(cycle>1 && !Boolean.TRUE.equals(prop(adapter,"available"))) {
             check("adapter-remains-available",false,"SAFE_REFUSAL_ADAPTER_UNAVAILABLE",state());finish();return;
         }
@@ -361,6 +424,12 @@ public class NativeProbe implements ApplicationListener {
         marker("relative-ready.json",marker);marker("relative-ready-"+cycle+".json",marker);
     }
 
+    boolean injectionFinished() {
+        if(!Boolean.getBoolean("buildwheel.probe.await-input-ack"))return true; // Manual probes and Windows' internal injector need no external handshake.
+        if(inputFinishedFrame < 0 && Files.isRegularFile(data.resolve("input-finished-"+ProcessHandle.current().pid()+"-"+cycle+".json")))inputFinishedFrame = frames;
+        return inputFinishedFrame >= 0 && frames >= inputFinishedFrame + 2; // Observe two ordinary SDL/Arc pumps after the driver finished posting; never nest a pump here.
+    }
+
     void sample() throws Throwable {
         boolean ok=Boolean.TRUE.equals(call(adapter,"sample",Context.javaToJS(delta,scope)));
         if(!ok) {
@@ -375,16 +444,74 @@ public class NativeProbe implements ApplicationListener {
     }
 
     void endCycle() throws Throwable {
-        boolean ended=Boolean.TRUE.equals(call(adapter,"end"));
+        exitTarget=requestedExitTarget();
+        int flags=SDL.SDL_GetWindowFlags(window());
+        boolean canSynchronize=Boolean.TRUE.equals(prop(adapter,"active")) && (flags&SDL.SDL_WINDOW_INPUT_FOCUS)!=0 && (flags&SDL.SDL_WINDOW_MINIMIZED)==0;
+        boolean ended=Boolean.TRUE.equals(canSynchronize?call(adapter,"end",exitTarget.get("requestedArcX"),exitTarget.get("requestedArcY")):call(adapter,"end"));
         int after=mode();probeOwnsMode=!ended || after!=0;
         Map<String,Object> item=new LinkedHashMap<>();item.put("cycle",cycle);item.put("samples",samples);item.put("nonzeroSamples",nonzero);
         item.put("sumDx",sumX);item.put("sumDy",sumY);item.put("absoluteDeltaSum",absMotion);item.put("endReturned",ended);item.put("modeAfterEnd",after);item.put("SDL_error",String.valueOf(SDL.SDL_GetError()));
         item.put("movementClassification",nonzero==0?"INCONCLUSIVE_NO_OBSERVED_MOTION":"OBSERVED_SDL_RELATIVE_DELTAS_SOURCE_REQUIRES_RUNNER_CORRELATION");
+        item.put("exitTarget",exitTarget);item.put("cursorSynced",prop(adapter,"cursorSynced"));item.put("exitPointTestEligible",canSynchronize);item.put("immediateExitState",state());
         cycles.add(item);report.put("cycles",cycles);event("cycle-ended",item);
         check("end-cycle-"+cycle,ended && after==0 && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",state());
         if(!ended || after!=0){finish();return;}
+        if(canSynchronize) {verifyExitImmediately();exitTargetPending=true;}
         setPhase("after-cycle");
     }
+
+    Map<String,Object> requestedExitTarget() {
+        // Deliberately asymmetric, fractional, in-window points expose rounding and a mirrored Y axis.
+        double x=127.4+cycle*47.2,y=166.6+cycle*29.3;
+        int width=Core.graphics.getWidth(),height=Core.graphics.getHeight();
+        int sdlX=Math.max(0,Math.min(width-1,(int)Math.round(x)));
+        int sdlY=Math.max(0,Math.min(height-1,(int)Math.round(height-y)));
+        return Map.of("requestedArcX",x,"requestedArcY",y,"SDLX",sdlX,"SDLY",sdlY,"arcX",sdlX,"arcY",height-sdlY);
+    }
+    boolean arcAtTarget(Map<String,Object> target) {
+        return Core.input.mouseX()==((Number)target.get("arcX")).intValue() && Core.input.mouseY()==((Number)target.get("arcY")).intValue();
+    }
+    boolean nativeAtTarget(Map<String,Object> snapshot,Map<String,Object> target) {
+        return Objects.equals(snapshot.get("SDL_mouseX"),target.get("SDLX")) && Objects.equals(snapshot.get("SDL_mouseY"),target.get("SDLY"));
+    }
+    boolean sameCursor(Map<String,Object> before,Map<String,Object> after) {
+        return Objects.equals(before.get("arcMouseX"),after.get("arcMouseX")) && Objects.equals(before.get("arcMouseY"),after.get("arcMouseY"))
+            && Objects.equals(before.get("SDL_mouseX"),after.get("SDL_mouseX")) && Objects.equals(before.get("SDL_mouseY"),after.get("SDL_mouseY"));
+    }
+    void verifyExitImmediately() throws Throwable {
+        Map<String,Object> snapshot=state();
+        check("end-synchronizes-arc-point-"+cycle,Boolean.TRUE.equals(prop(adapter,"cursorSynced")) && arcAtTarget(exitTarget),"CONFIRMED_COMPONENT_DEFECT",Map.of("target",exitTarget,"state",snapshot));
+        // SDL 2.0.10 X11 may update SDL_GetMouseState only after the ordinary next event pump.
+        if(System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("mac"))
+            check("end-synchronizes-cocoa-SDL-point-"+cycle,nativeAtTarget(snapshot,exitTarget),"CONFIRMED_COMPONENT_DEFECT",Map.of("target",exitTarget,"state",snapshot));
+        verifyPhysicalExitPoint("immediate");
+    }
+    void verifyExitAfterPump() throws Throwable {
+        exitTargetPending=false;
+        Map<String,Object> snapshot=state();
+        check("end-point-stable-after-normal-pump-"+cycle,arcAtTarget(exitTarget) && (!functions.containsKey("mouse") || nativeAtTarget(snapshot,exitTarget)),"CONFIRMED_COMPONENT_DEFECT",Map.of("target",exitTarget,"state",snapshot));
+        verifyPhysicalExitPoint("next-pump");
+        boolean ended=Boolean.TRUE.equals(call(adapter,"end",47.2,58.7));
+        Map<String,Object> after=state();
+        check("end-without-ownership-is-idempotent-"+cycle,ended && !Boolean.TRUE.equals(prop(adapter,"cursorSynced")) && sameCursor(snapshot,after),"CONFIRMED_COMPONENT_DEFECT",Map.of("before",snapshot,"after",after));
+        verifyPhysicalExitPoint("idempotent-end");
+        boolean moved=Boolean.TRUE.equals(call(adapter,"warpAbsolute",exitTarget.get("requestedArcX"),exitTarget.get("requestedArcY")));
+        check("absolute-return-keeps-normal-mode-"+cycle,moved && Boolean.TRUE.equals(call(adapter,"absoluteMode")) && arcAtTarget(exitTarget),"CONFIRMED_COMPONENT_DEFECT",state());
+        verifyPhysicalExitPoint("absolute-return");
+    }
+    void verifyPhysicalExitPoint(String phase) throws Throwable {
+        if(!globalCursorCalibrated)return; // Arc/SDL cache checks still run; this is explicitly not a physical-cursor certification.
+        if(phase.equals("immediate") && !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("mac"))return; // Old X11 observation is checked after the ordinary next pump.
+        int flags=SDL.SDL_GetWindowFlags(window());
+        if((flags&SDL.SDL_WINDOW_INPUT_FOCUS)==0 || (flags&SDL.SDL_WINDOW_MINIMIZED)!=0) {
+            check("physical-exit-"+phase+"-"+cycle,false,"INFRASTRUCTURE_FOCUS_NOT_OWNED",state());return;
+        }
+        Map<String,Object> observed=globalCursorSnapshot();
+        int expectedX=((Number)observed.get("windowX")).intValue()+((Number)exitTarget.get("SDLX")).intValue()+globalCursorOffsetX;
+        int expectedY=((Number)observed.get("windowY")).intValue()+((Number)exitTarget.get("SDLY")).intValue()+globalCursorOffsetY;
+        long differenceX=((Number)observed.get("globalX")).longValue()-expectedX,differenceY=((Number)observed.get("globalY")).longValue()-expectedY;
+        check("physical-exit-"+phase+"-"+cycle,Math.abs(differenceX)<=1 && Math.abs(differenceY)<=1,"CONFIRMED_COMPONENT_DEFECT",Map.of("target",exitTarget,"observed",observed,"expectedGlobalX",expectedX,"expectedGlobalY",expectedY,"pixelTolerance",1,"calibratedOffsetX",globalCursorOffsetX,"calibratedOffsetY",globalCursorOffsetY));
+    } // Windows overrides this with guarded public user32 queries.
 
     void resize() throws Throwable {
         widthBefore=Core.graphics.getWidth();heightBefore=Core.graphics.getHeight();

@@ -205,6 +205,7 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
     if IS_LINUX and not wayland: env["SDL_VIDEODRIVER"] = "x11"
     if fixture_sdl: env["LD_LIBRARY_PATH"] = str(fixture_sdl) + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     flags = ["-DSDL2_STATIC=1"] if system_sdl else []
+    flags.append("-Dbuildwheel.probe.await-input-ack=true")
     if raw_sdl: flags.append("-Dbuildwheel.probe.raw-sdl=true")
     command = java_command("NativeProbe", case, JAR, ROOT, case, scenario, "3", extra_flags=flags)
     save(case / "launch.json", {"command": command, "environment": {k: env.get(k) for k in ["DISPLAY","WAYLAND_DISPLAY","MINDUSTRY_FORCE_WAYLAND","SDL_VIDEODRIVER","XDG_RUNTIME_DIR","LD_LIBRARY_PATH"]}, "systemSDL": system_sdl, "faultInjectedSDL":bool(fixture_sdl)})
@@ -212,7 +213,7 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
     with (case / "process.log").open("w", encoding="utf-8") as log:
         p = subprocess.Popen(command, cwd=case, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         prepared = False
-        last_motion = 0
+        injected_cycles = set()
         timed_out = False
         while p.poll() is None:
             now = time.monotonic()
@@ -225,9 +226,12 @@ def native_case(name, base_env, scenario="normal", wayland=False, system_sdl=Fal
             if not prepared and (case / "probe-phase.json").exists():
                 inject(env, p, case, "prepare", wayland)
                 prepared = True
-            if phase == "sampling" and (case / "relative-ready.json").exists() and now-last_motion > .8:
-                inject(env, p, case, "motion", wayland)
-                last_motion = now
+            if phase == "sampling":
+                cycle = read_result(case / "relative-ready.json").get("cycle")
+                if isinstance(cycle, int) and cycle not in injected_cycles:
+                    inject(env, p, case, "motion", wayland)
+                    injected_cycles.add(cycle)
+                    save(case / f"input-finished-{p.pid}-{cycle}.json", {"pid": p.pid, "cycle": cycle, "postingFinished": True})
             time.sleep(.1)
         execution = {"exit": p.wait(), "seconds": round(time.monotonic()-started,2), "timeout": timed_out}
     report = read_result(case / "native-probe-result.json")
@@ -309,6 +313,14 @@ def input_order_diagnostic():
     record("input-order-diagnostic", "REAL_ARC_INPUT_WITH_MODELED_SDL", execution, read_result(case / "startup-result.json"),
            "Known F-02 must reproduce: real SdlInput/queue/unchanged main, modeled post-pump SDL accumulator and JNI packets. Not native-OS input proof or a fix.")
 
+def cursor_release_regression():
+    case = OUT / "cursor-release-regression"
+    case.mkdir(exist_ok=True)
+    command = java_command("StartupHarness", case, JAR, ROOT, case, "factory", "en", "tests/platform/cursor-release.js")
+    execution = capture(command, case / "process.log", env=environment(case), timeout=90)
+    record("cursor-release-regression", "CURSOR_RELEASE_MODEL_AND_PE", execution, read_result(case / "startup-result.json"),
+           "Production selection/close and release bodies with modeled native effects; actual bundled PE discovery. Physical cursor is checked separately by native probes.")
+
 def android_models():
     # Real host JVM/Rhino/UI/files; Android handlers and Os are explicitly modeled.
     for scenario in ("factory", "user-settings", "user-settings-restart"):
@@ -379,6 +391,7 @@ try:
     if not ARGS.prepare_only:
         startup_tests()
         input_order_diagnostic()
+        cursor_release_regression()
         android_models()
         graphics = setup_graphics()
         native_case("native-backend-only", graphics, "backend-only")
@@ -422,6 +435,7 @@ bad = any((r["execution"].get("exit",0) != 0 or str(r["classification"]).startsw
 for r in RESULTS:
     if r["group"] == "REAL_JVM_MOCK_GRAPHICS_STARTUP" and not str(r["classification"]).startswith("PASS_"): bad = True
     if r["test"] == "input-order-diagnostic" and r["classification"] != "F02_INFORMATION_LOSS_REPRODUCED": bad = True
+    if r["test"] == "cursor-release-regression" and r["classification"] != "PASS_CURSOR_RELEASE_MODEL_AND_PE": bad = True
     if r["group"] == "HOST_MODELED_ANDROID" and r["classification"] != "PASS_ANDROID_MODEL": bad = True
     if r["group"] == "HOST_MODELED_ANDROID_CTRL" and r["classification"] != "PASS_HOST_ANDROID_CTRL_MODEL": bad = True
     if r["test"] == "native-forced-warp" and r["classification"] != "SAFE_REFUSAL_WARP_POLICY": bad = True

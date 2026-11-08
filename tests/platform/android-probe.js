@@ -5,7 +5,7 @@
     var menu = require("menu"), libraryModule = require("wheel-library"), controls = menu.getControls();
     var AndroidKey = Packages.android.view.KeyEvent, Motion = Packages.android.view.MotionEvent;
     var originalProfile = Core.settings.getDataDirectory(), previousKeyboard = Core.settings.getBool("keyboard", false);
-    var frames = 0, next = 0, actions = [], editor = null, preview = null, beforeLibrary, keyTests;
+    var frames = 0, next = 0, actions = [], editor = null, preview = null, beforeLibrary, keyTests, desktopNativeCalls = 0, selectedMousePoint;
     var desktop = Packages.mindustry.input.DesktopInput, mobile = Packages.mindustry.input.MobileInput;
     function check(value, message) { H.check(!!value, message); }
     function step(action, delay, ready) { actions.push({action: action, delay: delay == null ? 24 : delay, ready: ready}); }
@@ -79,6 +79,9 @@
         var noFfm = false; try { java.lang.Class.forName("java.lang.foreign.Linker"); } catch (error) { noFfm = true; }
         check(noFfm, "Android JVM has no Java FFM classes");
         var adapter = require("sdl-relative").create(); check(!adapter.available && !adapter.begin(), "Android safely declines desktop SDL/FFM adapter"); adapter.dispose();
+        var nativeApi = require("sdl-relative"), nativeCreate = nativeApi.create, nativeWarp = nativeApi.createWarp;
+        nativeApi.create = function() { desktopNativeCalls++; return nativeCreate(); };
+        nativeApi.createWarp = function(provider) { desktopNativeCalls++; return nativeWarp(provider); }; // Observe the existing module; runtime source bytes remain unchanged.
         storageTests();
         var store = libraryModule.create(), sentinel = originalProfile.child("buildwheel-android-sentinel.txt");
         if (String(H.stage()) === "initial") {
@@ -105,6 +108,9 @@
     step(function() {
         editor = Core.scene.getDialog(); check(editor != null && editor.find("buildwheel-preview") != null, "Ctrl+minus through Android key queue opened actual editor");
         check(editor.find("buildwheel-control-dimMissingMaterials") != null, "Existing global settings are present");
+        check(editor.find("buildwheel-control-returnCursorAfterSelection") != null, "Return cursor setting is present on Android");
+        if (!controls.returnCursorAfterSelection) click("buildwheel-control-returnCursorAfterSelection");
+        check(controls.returnCursorAfterSelection, "Return preference enabled through actual standard checkbox");
         H.screenshot("editor"); click("buildwheel-key-wheel-9");
     }, 24);
     step(function() { check(String(Core.scene.getDialog().name) === "buildwheel-rebind", "Actual rebind dialog opened"); tap(AndroidKey.KEYCODE_F6); });
@@ -127,8 +133,8 @@
         physical(new Vec2(Core.scene.getWidth() / 2, Core.scene.getHeight() / 2), Motion.ACTION_HOVER_MOVE);
     }, 30);
     step(function() { chord(AndroidKey.KEYCODE_1); });
-    step(function() { var e = wheel(); check(e != null, "Android Ctrl+1 opened real selection wheel"); H.screenshot("wheel"); pressPoint(at(e, .5, .82)); });
-    step(function() { check(wheel() == null && Vars.control.input.block === Blocks.conveyor, "Android LMB selected conveyor and closed wheel"); chord(AndroidKey.KEYCODE_1); });
+    step(function() { var e = wheel(); check(e != null, "Android Ctrl+1 opened real selection wheel"); H.screenshot("wheel"); var point = at(e, .5, .82); selectedMousePoint = Core.scene.getViewport().project(point.cpy()); pressPoint(point); });
+    step(function() { check(wheel() == null && Vars.control.input.block === Blocks.conveyor, "Android LMB selected conveyor and closed wheel"); check(Math.abs(Core.input.mouseX() - selectedMousePoint.x) <= 1 && Math.abs(Core.input.mouseY() - selectedMousePoint.y) <= 1, "Android return preference preserves actual click coordinates"); chord(AndroidKey.KEYCODE_1); });
     step(function() { check(wheel() != null, "Android wheel reopened"); computer(false); });
     step(function() { check(!menu.computerInputActive() && wheel() == null, "Runtime switch to MobileInput closed wheel safely"); chord(AndroidKey.KEYCODE_1); });
     step(function() { check(wheel() == null, "MobileInput did not intercept wheel chord"); computer(true); key(AndroidKey.KEYCODE_CTRL_LEFT, true); });
@@ -146,6 +152,8 @@
     });
     keyTests.schedule();
     step(function() {
+        check(desktopNativeCalls === 0, "Android selection/return/relative preferences never prepared desktop native adapters");
+        controls.set("returnCursorAfterSelection", false);
         Core.settings.put("keyboard", previousKeyboard); Core.settings.manualSave();
         check(String(originalProfile.child("buildwheel/library.json").readString("UTF-8")) === beforeLibrary, "Editor/input operations preserved unrelated library bytes");
         H.finish();

@@ -50,6 +50,8 @@ H.assertTrue(Core.input.getInputMultiplexer().getProcessors().size === initialPr
 H.assertTrue(nativePrepares === 0 && warpCreates === 0, "initialization did not prepare SDL/FFM or desktop warp");
 H.assertTrue(Vars.mobile && modules.menu.computerInputActive(), "DesktopInput accepted without changing Vars.mobile");
 var controls = modules.menu.getControls(), mux = Core.input.getInputMultiplexer();
+H.assertTrue(!controls.returnCursorAfterSelection, "return cursor defaults off on Android");
+controls.returnCursorAfterSelection = true; // Exercise successful selections with the preference enabled; Android must still skip physical positioning.
 var mainProcessor = mux.getProcessors().get(0);
 H.assertTrue(controls.relativeMouse && controls.clipOuter && controls.clipInner, "saved desktop-native options loaded without being erased");
 if (restarting) H.assertTrue(controls.key(controls.bindings.wheels[1]) == KeyCode.f8, "fresh JVM restored reassigned wheel key");

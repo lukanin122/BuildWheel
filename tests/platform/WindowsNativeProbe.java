@@ -94,6 +94,7 @@ public final class WindowsNativeProbe extends NativeProbe {
                 warp=(Scriptable)call(module,"createWarp",adapter);
                 boolean shifted=Boolean.TRUE.equals(call(warp,"move",410,310));
                 check("ordinary-absolute-warp",shifted,"SAFE_REFUSAL_FOCUS_OR_NATIVE",safeState());
+                if(scenario.equals("normal"))foreignModeWindows();
                 centerPointer();setPhase("windows-before-cycle");
             }else if(phase.equals("windows-before-cycle") && elapsed(phaseStart)>.4)startCycle();
             else if(phase.equals("windows-sampling")) {
@@ -108,7 +109,9 @@ public final class WindowsNativeProbe extends NativeProbe {
                 if(!Float.isFinite(delta.x) || !Float.isFinite(delta.y))throw new AssertionError("Nonfinite relative movement");
                 if(inject && elapsed(lastInjection)>.08)injectMotion();
                 if(elapsed(phaseStart)>=motionSeconds)completeCycle();
-            }else if(phase.equals("windows-after-cycle") && elapsed(phaseStart)>.4) {
+            }else if(phase.equals("windows-after-cycle")) {
+                if(exitTargetPending)verifyExitAfterPump();
+                if(elapsed(phaseStart)<=.4)return;
                 if(cycle<3)startCycle();else {
                     boolean began=Boolean.TRUE.equals(call(adapter,"begin"));
                     check("begin-before-dispose",began,"SAFE_REFUSAL_FOCUS_OR_NATIVE",safeState());
@@ -124,6 +127,10 @@ public final class WindowsNativeProbe extends NativeProbe {
         catch(Throwable t){failure(t,"INFRASTRUCTURE_PROBE_RUNTIME_EXCEPTION");}
     }
     void startCycle()throws Throwable {
+        if(!foregroundOwned()) {
+            check("relative-cycle-requires-probe-foreground",false,"INFRASTRUCTURE_FOREGROUND_NOT_OWNED",safeState());
+            report.put("classification","SAFE_REFUSAL_BEGIN_FOCUS_OR_NATIVE");finish();return;
+        }
         cycle++;samples=0;nonzero=0;sumX=0;sumY=0;absMotion=0;injected=0;skippedInjection=0;lastInjection=System.nanoTime();
         boolean began=Boolean.TRUE.equals(call(adapter,"begin"));
         report.put("begin"+cycle,Map.of("return",began,"reason",String.valueOf(prop(adapter,"reason")),"SDL_error",String.valueOf(SDL.SDL_GetError())));
@@ -156,13 +163,58 @@ public final class WindowsNativeProbe extends NativeProbe {
         report.put("testPointerCentered",number(win("SetCursorPos",x,y))!=0);
     }
     void completeCycle()throws Throwable {
-        boolean ended=Boolean.TRUE.equals(call(adapter,"end"));
+        exitTarget=requestedExitTarget();
+        boolean ownedForeground=foregroundOwned();
+        boolean ended=Boolean.TRUE.equals(ownedForeground?call(adapter,"end",exitTarget.get("requestedArcX"),exitTarget.get("requestedArcY")):call(adapter,"end"));
         Map<String,Object> item=new LinkedHashMap<>();item.put("cycle",cycle);item.put("samples",samples);item.put("nonzeroSamples",nonzero);item.put("sumDx",sumX);item.put("sumDy",sumY);item.put("absoluteDeltaSum",absMotion);
         item.put("OSMotionInjectionCalls",injected);item.put("OSMotionInjectionSkippedForeground",skippedInjection);item.put("endReturned",ended);item.put("SDL_error",String.valueOf(SDL.SDL_GetError()));
         item.put("successfulEndValidatedByAdapter",ended);item.put("movementClassification",nonzero==0?"INCONCLUSIVE_NO_OBSERVED_MOTION":"OBSERVED_REAL_SDL_DELTAS_WITH_SYNTHETIC_OS_MOTION");
+        item.put("exitTarget",exitTarget);item.put("cursorSynced",prop(adapter,"cursorSynced"));item.put("foregroundOwnedAtEnd",ownedForeground);
         cycles.add(item);report.put("cycles",cycles);event("windows-cycle-ended",item);
         check("end-cycle-"+cycle,ended && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",safeState());
-        if(!ended){finish();return;}setPhase("windows-after-cycle");
+        if(!ended){finish();return;}
+        if(!ownedForeground) {
+            check("exit-point-test-requires-probe-foreground",false,"INFRASTRUCTURE_FOREGROUND_NOT_OWNED",safeState());
+            report.put("classification","SAFE_REFUSAL_SAMPLE_STOPPED");finish();return;
+        }
+        verifyExitImmediately();exitTargetPending=true;setPhase("windows-after-cycle");
+    }
+    void foreignModeWindows()throws Throwable {
+        // A second instance of the same verified production adapter represents a different mod.
+        // No private SDL setter/getter or guessed pointer is added to the Windows test.
+        Scriptable owner=(Scriptable)call(module,"create");
+        boolean began=Boolean.TRUE.equals(call(owner,"begin"));
+        if(!began) {check("foreign-mode-fixture-begin",false,"INFRASTRUCTURE_RELATIVE_MODE_UNAVAILABLE",safeState());call(owner,"dispose");return;}
+        try {
+            boolean refused=!Boolean.TRUE.equals(call(adapter,"begin"));
+            Map<String,Object> before=windowsCursorSnapshot();
+            boolean ended=Boolean.TRUE.equals(call(adapter,"end",173.4,219.6));
+            Map<String,Object> after=windowsCursorSnapshot();
+            check("refuse-foreign-mode",refused && !Boolean.TRUE.equals(prop(adapter,"active")),"CONFIRMED_COMPONENT_DEFECT",safeState());
+            check("leave-foreign-mode-and-pointer-untouched",ended && Boolean.TRUE.equals(prop(owner,"active")) && !Boolean.TRUE.equals(call(owner,"absoluteMode")) && !Boolean.TRUE.equals(prop(adapter,"cursorSynced")) && Boolean.TRUE.equals(before.get("read")) && before.equals(after),"CONFIRMED_COMPONENT_DEFECT",Map.of("before",before,"after",after));
+            boolean sampled=Boolean.TRUE.equals(call(owner,"sample",Context.javaToJS(delta,scope)));
+            check("foreign-owner-can-still-sample",sampled,"CONFIRMED_COMPONENT_DEFECT",safeState());
+        } finally {
+            boolean ended=Boolean.TRUE.equals(call(owner,"end"));
+            check("foreign-owner-cleanup",ended && !Boolean.TRUE.equals(prop(owner,"active")),"CONFIRMED_COMPONENT_DEFECT",safeState());
+            call(owner,"dispose");
+        }
+    }
+    Map<String,Object> windowsCursorSnapshot()throws Throwable {
+        boolean read=number(win("GetCursorPos",point))!=0;
+        return Map.of("read",read,"screenX",buffer(point).getInt(0),"screenY",buffer(point).getInt(4),"arcMouseX",Core.input.mouseX(),"arcMouseY",Core.input.mouseY());
+    }
+    @Override void verifyPhysicalExitPoint(String when)throws Throwable {
+        if(!foregroundOwned()) {check("physical-exit-"+when+"-"+cycle,false,"INFRASTRUCTURE_FOREGROUND_NOT_OWNED",safeState());return;}
+        Object active=win("GetActiveWindow");buffer(point).putInt(0,0).putInt(4,0);
+        boolean described=number(win("GetClientRect",active,rect))!=0 && number(win("ClientToScreen",active,point))!=0;
+        int clientWidth=buffer(rect).getInt(8)-buffer(rect).getInt(0),clientHeight=buffer(rect).getInt(12)-buffer(rect).getInt(4);
+        if(!described || clientWidth<=0 || clientHeight<=0) {check("physical-exit-"+when+"-"+cycle,false,"INFRASTRUCTURE_WINDOW_GEOMETRY_UNAVAILABLE",safeState());return;}
+        int expectedX=buffer(point).getInt(0)+(int)Math.round(((Number)exitTarget.get("SDLX")).doubleValue()*clientWidth/Core.graphics.getWidth());
+        int expectedY=buffer(point).getInt(4)+(int)Math.round(((Number)exitTarget.get("SDLY")).doubleValue()*clientHeight/Core.graphics.getHeight());
+        Map<String,Object> observed=windowsCursorSnapshot();
+        int differenceX=((Number)observed.get("screenX")).intValue()-expectedX,differenceY=((Number)observed.get("screenY")).intValue()-expectedY;
+        check("physical-exit-"+when+"-"+cycle,Boolean.TRUE.equals(observed.get("read")) && Math.abs(differenceX)<=1 && Math.abs(differenceY)<=1,"CONFIRMED_COMPONENT_DEFECT",Map.of("target",exitTarget,"expectedScreenX",expectedX,"expectedScreenY",expectedY,"observed",observed,"pixelTolerance",1));
     }
     void cursorState(String key)throws Throwable {
         buffer(cursor).putInt(0,24);
