@@ -3,6 +3,8 @@
 var knownHash = "cd1ad4237499606b174a190d9b7943e2b36f14c2f94fd119a36c877bb6e857d5"; // Проверенная DLL Mindustry 160.7, SDL 2.32.8.
 var templates = {"get": {"hex": "4885c974088b05????????89014885d274088b05????????89028b15????????48c705????????0000000085d27e39488b05????????4863ca31d24c8d04c883e101740c8b50044883c0084c39c0740f0b50044883c0100b50fc4c39c075f189d0c3660f1f44000031d289d0c3", "rip": [[7, 11], [20, 24], [28, 32], [35, 43], [50, 54]], "calls": []}, "set": {"hex": "56534883ec2889cbe8????????391d????????4889c6747185db0f85a00000008b15????????85d2746ec705????????00000000c705????????0000000048c705????????000000004885f6742a4889f1e8????????448b05????????4889f18b15????????41b901000000e8????????31c9e8????????31c9e8????????b900040000e8????????31c04883c4285b5ec3660f1f440000488b05????????4885c0749031c9ffd0c705????????0000000048c705????????00000000eb8a9048833d????????00746e31d2488d0d????????e8????????85c00f84c8000000c705????????0100000031c9891d????????48c705????????00000000e8????????4885f60f8474ffffff4889f1e8????????8b05????????85c075534889f1e8????????31c9e8????????e94effffff0f1f8000000000488b05????????4885c0741289d9ffd085c0799e48833d????????00758a488d0d????????4883c4285b5ee9????????0f1f8400000000008b462c4889f141b9010000004189c041c1e81f4101c08b462841d1f889c2c1ea1f01c2d1fae8????????4889f1e8????????eb810f1f4000488b05????????4885c07590eb96", "rip": [[15, 19], [34, 38], [44, 52], [54, 62], [65, 73], [89, 93], [98, 102], [155, 159], [170, 178], [181, 189], [195, 200], [207, 211], [226, 234], [238, 242], [245, 253], [277, 281], [315, 319], [335, 340], [345, 349], [427, 431]], "calls": [[9, 13], [82, 86], [109, 113], [116, 120], [123, 127], [133, 137], [212, 216], [254, 258], [271, 275], [289, 293], [296, 300], [356, 360], [406, 410], [414, 418]]}, "mode": {"hex": "8b05????????c3", "rip": [[2, 6]], "calls": []}}; // Машинные шаблоны ниже допускают изменение только адресных операндов, а не логики инструкций.
 
+templates.warp = {hex: "4883ec384885c9747ff6414040756d448b1d????????8915????????448905????????c705????????000000004585db7516488b05????????4885c074274883c43848ffe00f1f004585c97453488b05????????4885c0740c448b0d????????4585c975d944894424204189d18b15????????4531c0e8????????904883c438c30f1f8000000000488b0d????????4885c90f8571ffffffebe2660f1f440000448b15????????4585d275a18915????????448905????????c705????????01000000ebb7", rip: [[18,22],[24,28],[31,35],[37,45],[53,57],[80,84],[92,96],[111,115],[139,143],[163,167],[174,178],[181,185],[187,195]], calls: [[119,123]]}; // Проверяем обработчик переноса целиком, но вызываем только его публичную трёхаргументную обёртку SDL.
+
 // ПРОВЕРКА PE И ОГРАНИЧЕННОЕ РАСПОЗНАВАНИЕ SDL DYNAPI
 exports.inspect = function(bytes) { // Ничего не загружает и не вызывает: принимает байты уже установленной DLL.
     var messages = Object.create(null); // Повторные проверки PE используют готовый перевод, не обращаясь к Java Bundle внутри каждого прохода.
@@ -71,7 +73,16 @@ exports.inspect = function(bytes) { // Ничего не загружает и �
     var modes = []; // Getter режима обязан читать ту же переменную, которую сравнивает setter.
     for (var k = 0; k < entries.length; k++) { var r = entries[k]; if (functions[r] == 7 && match(r, templates.mode.hex) && rel(r, 2, 6) == modeVariable) modes.push(r); }
     need(modes.length == 1, message("buildwheel.sdl.pe.mode-getter"));
-    return {hash: hash, automatic: !fast, imageSize: imageSize, headersSize: headersSize, baseOffset: opt + 24, warpVariable: warpVariable, get: stub(cursorSlot - 56), set: stub(cursorSlot - 40), mode: stub(cursorSlot - 32), realGet: get, realSet: set, realMode: modes[0], getSlot: cursorSlot - 56, setSlot: cursorSlot - 40, modeSlot: cursorSlot - 32, anchor: exported("Java_arc_backend_sdl_jni_SDL_SDL_1SetCursor"), functions: functions, offset: offset}; // Замыкания используются только при проверке загруженного образа.
+    var warpHandler = body("warp", fast ? 0x4ebd0 : null), warps = [], warpCandidates = fast ? [0x4eca0] : entries; // Быстрый путь по хешу проходит те же проверки, что и поиск неизвестной DLL.
+    need(rel(set, 109, 113) == warpHandler && rel(set, 406, 410) == warpHandler, message("buildwheel.sdl.pe.call-target")); // Оба переноса внутри проверенного setter должны вести в этот же обработчик.
+    for (var k = 0; k < warpCandidates.length; k++) { var r = warpCandidates[k]; if (functions[r] == 8 && match(r, "4531c9e9????????") && rel(r, 4, 8) == warpHandler) warps.push(r); } // Публичный SDL_WarpMouseInWindow задаёт четвёртый аргумент внутреннего обработчика равным false.
+    need(warps.length == 1, message("buildwheel.sdl.pe.dynapi-ambiguity"));
+    need(rel(warpHandler, 18, 22) == modeVariable && rel(warpHandler, 92, 96) == warpVariable && rel(warpHandler, 174, 178) == rel(set, 98, 102) && rel(warpHandler, 181, 185) == rel(set, 89, 93), message("buildwheel.sdl.pe.motion-state")); // Перенос обязан менять координаты той же мыши, чей режим мы переключаем.
+    need(rel(warpHandler, 37, 45) == rel(warpHandler, 187, 195) && rel(warpHandler, 53, 57) == rel(warpHandler, 80, 84) && rel(warpHandler, 53, 57) == rel(set, 195, 200) && rel(warpHandler, 53, 57) == rel(set, 335, 340), message("buildwheel.sdl.pe.field-layout")); // Проверяем флаг позиции и общий указатель платформенного переноса.
+    for (var k = 0; k < templates.warp.rip.length; k++) { var p = templates.warp.rip[k]; section(rel(warpHandler, p[0], p[1]), p[0] == 53 || p[0] == 80 || p[0] == 139 ? 8 : 4, 0x80000000); }
+    need(functions[rel(warpHandler, 119, 123)] != null, message("buildwheel.sdl.pe.call-target"));
+    var warpStub = fast ? 0x462d0 : stub(cursorSlot - 48); need(slot(warpStub) == cursorSlot - 48, message("buildwheel.sdl.pe.dynapi-link")); // Известный RVA не отменяет проверку обёртки и её ABI-слота.
+    return {hash: hash, automatic: !fast, imageSize: imageSize, headersSize: headersSize, baseOffset: opt + 24, warpVariable: warpVariable, get: stub(cursorSlot - 56), warp: warpStub, set: stub(cursorSlot - 40), mode: stub(cursorSlot - 32), realGet: get, realWarp: warps[0], realWarpHandler: warpHandler, realSet: set, realMode: modes[0], getSlot: cursorSlot - 56, warpSlot: cursorSlot - 48, setSlot: cursorSlot - 40, modeSlot: cursorSlot - 32, anchor: exported("Java_arc_backend_sdl_jni_SDL_SDL_1SetCursor"), functions: functions, offset: offset}; // Замыкания используются только при проверке загруженного образа.
 };
 
 // LINUX: ПРОВЕРКА УЖЕ ЗАГРУЖЕННЫХ ЭКСПОРТОВ ПО КАРТЕ ПАМЯТИ
@@ -102,6 +113,8 @@ exports.linuxImage = function(text, addresses, minimum) { // Ничего не �
 exports.create = function() {
     var result = {available: false, active: false, reason: Core.bundle.get("buildwheel.sdl.unsupported")}, arena = null, owned = false; // Отказ оставляет обычный ввод и не включает прежний ограничитель.
     var closing = false, disposing = false, releaseListener = null; // Отложенное освобождение Cocoa не разрешает повторный захват и сохраняет память FFM до завершения.
+    var exitPending = false, exitX = 0, exitY = 0, releaseAttempted = false; // Конечная точка нужна только при закрытии; движение не получает новых проверок или выделений памяти.
+    result.cursorSynced = false; // Успех освобождения режима не подменяет успех переноса указателя.
     result.begin = () => false; result.sample = () => false; result.end = () => true; result.dispose = () => {}; // Безопасные методы для других ОС, Java и backend.
     if ((!OS.isWindows && !OS.isLinux && !OS.isMac) || String(Core.input.getClass().getName()) != "arc.backend.sdl.SdlInput" || typeof Core.app.getWindow != "function") return result;
     try {
@@ -143,11 +156,13 @@ exports.create = function() {
             if (headerBase != base) throw new Error(Core.bundle.get("buildwheel.sdl.windows.base"));
             for (var i = 0; i < liveHeaders.length; i++) if ((i < info.baseOffset || i >= info.baseOffset + 8) && liveHeaders[i] != fileBytes[i]) throw new Error(Core.bundle.format("buildwheel.sdl.live-header", i.toString(16))); // Остальные поля и секции должны совпасть до чтения производных RVA.
             function same(r, size) { var live = copy.invoke(memory(r, size), [byteLayout]), p = info.offset(r, size); for (var i = 0; i < size; i++) if (live[i] != fileBytes[p + i]) throw new Error(Core.bundle.get("buildwheel.sdl.windows.code")); } // Выбранные RIP-relative тела не содержат ASLR-релокаций.
-            var names = [[info.get, info.getSlot, info.realGet], [info.set, info.setSlot, info.realSet], [info.mode, info.modeSlot, info.realMode]];
+            var names = [[info.get, info.getSlot, info.realGet], [info.warp, info.warpSlot, info.realWarp], [info.set, info.setSlot, info.realSet], [info.mode, info.modeSlot, info.realMode]];
             for (var i = 0; i < names.length; i++) { var n = names[i]; same(n[0], 7); same(n[2], info.functions[n[2]]); if (addr(getPointer.invoke(memory(n[1], 8), [address, zero])) != base + n[2]) throw new Error(Core.bundle.get("buildwheel.sdl.windows.dynapi")); } // Чужой SDL_DYNAMIC_API не захватываем.
             var set = bind(memory(info.set, 7), integer, [integer]), get = bind(memory(info.get, 7), integer, [address, address]), mode = bind(memory(info.mode, 7), integer, []); // Первый вызов приватного SDL разрешён только теперь.
             var flag = memory(info.warpVariable, 4);
             var nativeFunctions = {set: set, get: get, mode: mode, hash: info.hash, automatic: info.automatic, description: Core.bundle.get(info.automatic ? "buildwheel.sdl.discovery.automatic" : "buildwheel.sdl.discovery.known"), allowed: () => Number(getInt.invoke(flag, readArgs)) == 0};
+            same(info.realWarpHandler, info.functions[info.realWarpHandler]); // RIP-relative код обработчика не содержит требующих поправки абсолютных адресов.
+            nativeFunctions.warp = downcall.invoke(linker, array([memory(info.warp, 7), F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // DynAPI-слот и все связанные тела уже сверены с загруженной DLL.
             info = null; fileBytes = null; names = null; liveHeaders = null; moduleOf = null; filename = null; describe = null; kernel = null;
             return nativeFunctions;
         }
@@ -171,11 +186,13 @@ exports.create = function() {
             try { // Разовый перенос обычного указателя не является условием доступности относительного ввода.
                 var warp = find.invoke(symbols, ["SDL_WarpMouseInWindow"]).orElseThrow();
                 var driver = find.invoke(symbols, ["SDL_GetCurrentVideoDriver"]).orElseThrow();
-                exports.linuxImage(maps, {warp: addr(warp), driver: addr(driver), currentWindow: addresses.currentWindow}, 3); // Принадлежность окна уже проверена; оба дополнительных экспорта должны находиться в том же образе SDL.
+                var cursor = find.invoke(symbols, ["SDL_ShowCursor"]).orElseThrow();
+                exports.linuxImage(maps, {warp: addr(warp), driver: addr(driver), cursor: addr(cursor), currentWindow: addresses.currentWindow}, 4); // Принадлежность окна уже проверена; дополнительные экспорты должны находиться в том же образе SDL.
                 var driverName = bind(driver, address, []).invokeWithArguments(none); // Getter без аргументов не получает неподтверждённых указателей.
                 var getDriverString = seg.getMethod("getString", [java.lang.Long.TYPE]);
                 driverText = addr(driverName) == 0 ? "" : String(getDriverString.invoke(reinterpret.invoke(driverName, [new java.lang.Long("64")]), [zero])); // Имя принадлежит проверенной SDL; чтение ограничено длиной имени backend.
                 if (driverText == "x11") found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); // Только подтверждённый X11 поддерживает обычный warp; Wayland и неизвестный backend не смещают колесо и кэш Arc.
+                if (found.warp != null) found.cursor = bind(cursor, integer, [integer]); // Старую SDL скрываем на время перехода, не заменяя форму курсора.
             } catch (unsupportedWarp) {} // Отсутствующий экспорт отключает только сдвиг обычного указателя.
             // X11: ПОДТВЕРЖДЕНИЕ XINPUT2 ЧЕРЕЗ ПУБЛИЧНЫЕ API, БЕЗ ВНУТРЕННИХ ПОЛЕЙ SDL
             try { // Ни setter, ни getter режима SDL не отличают нативный ввод от автоматической warp-эмуляции.
@@ -299,6 +316,7 @@ exports.create = function() {
             }
             var found = {set: bind(pointers.set, integer, [integer]), get: bind(pointers.get, integer, [address, address]), mode: bind(pointers.mode, integer, []), description: "macOS Cocoa SDL2 2.0.16", image: owner.path};
             try { var warp = symbol("SDL_WarpMouseInWindow"); sameImage(warp, "SDL_WarpMouseInWindow"); found.warp = downcall.invoke(linker, array([warp, F.FunctionDescriptor.ofVoid([address, integer, integer]), options])); } catch (unsupportedWarp) {} // Разовый перенос разрешён только через экспорт уже подтверждённой SDL.
+            if (found.warp != null) { var cursor = symbol("SDL_ShowCursor"); sameImage(cursor, "SDL_ShowCursor"); found.cursor = bind(cursor, integer, [integer]); } // Cocoa сохраняет собственный выбранный курсор; временно меняется только видимость.
             found.ready = () => stable() && addr(mouseFocus.invokeWithArguments(none)) == expectedWindow && addr(keyboardFocus.invokeWithArguments(none)) == expectedWindow && Number(hint.invokeWithArguments(hintArgs)) == 0; // Отложенное включение и принудительный warp отвергаем до захвата.
             found.beforeBegin = () => clear.invokeWithArguments(none); // Отделяем новую ошибку CoreGraphics от прежних сообщений SDL.
             found.allowed = function() { var error = String(SDL.SDL_GetError()); found.rejection = "SDL Cocoa: " + (error.length > 0 ? error : Core.bundle.get("buildwheel.sdl.mac.listener")); return error.length == 0 && stable(); }; // В SDL 2.0.16 ошибка native-пути сохраняется даже после успешного warp fallback.
@@ -316,12 +334,31 @@ exports.create = function() {
         var on = array([new java.lang.Integer("1")]), off = array([new java.lang.Integer("0")]);
         function focused() { if (Core.app.getWindow() != window) return false; var flags = SDL.SDL_GetWindowFlags(window); return (flags & SDL.SDL_WINDOW_INPUT_FOCUS) != 0 && (flags & SDL.SDL_WINDOW_MINIMIZED) == 0; } // Не используем старое окно при его замене и не захватываем неактивное.
         result.absoluteMode = () => !owned && !closing && focused() && Number(mode.invokeWithArguments(none)) == 0; // Разовый перенос не вмешивается в собственный или чужой относительный режим.
-        var warpArgs = null; // Аргументы обычного переноса не нужны, пока пользователь не открыл колесо у края экрана.
+        var warpArgs = null, cursorFields = null; // Координаты и доступ к кэшу Arc подготавливаем лишь при первом переносе.
+        var queryCursor = array([new java.lang.Integer("-1")]); // SDL_ShowCursor(-1) только запрашивает исходную видимость.
+        function cursorWindowReady() {
+            try { return !disposing && focused() && java.lang.Thread.currentThread().equals(Core.app.getMainThread()); } catch (error) { return false; } // Проверка переноса не должна блокировать освобождение после потери окна или фокуса.
+        }
+        function canWarp() {
+            try { return cursorWindowReady() && (nativeFunctions.valid == null || nativeFunctions.valid()); } catch (error) { return false; } // Cocoa может временно запретить перенос, сохраняя правильное окно.
+        }
+        function warpPosition(screenX, screenY, syncArc) {
+            if (nativeFunctions.warp == null || !isFinite(screenX) || !isFinite(screenY) || !canWarp()) return false; // Не переносим мышь над другим приложением или при неподтверждённом Cocoa listener.
+            try {
+                var width = Core.graphics.getWidth(), height = Core.graphics.getHeight();
+                if (width <= 0 || height <= 0) return false;
+                var x = Math.max(0, Math.min(width - 1, Math.round(screenX))), y = Math.max(0, Math.min(height - 1, Math.round(height - screenY))); // Ограничиваем SDL-точку внутри окна; его ось Y направлена вниз.
+                if (cursorFields == null) { cursorFields = [Core.input.getClass().getDeclaredField("mouseX"), Core.input.getClass().getDeclaredField("mouseY")]; cursorFields[0].setAccessible(true); cursorFields[1].setAccessible(true); } // Проверяем доступ до физического переноса.
+                if (warpArgs == null) warpArgs = array([ofAddress.invoke(null, [new java.lang.Long(String(window))]), null, null]);
+                warpArgs[1] = new java.lang.Integer(String(x)); warpArgs[2] = new java.lang.Integer(String(y));
+                nativeFunctions.warp.invokeWithArguments(warpArgs); // Используем только проверенную SDL, обслуживающую игровое окно.
+                if (syncArc) { cursorFields[0].setInt(Core.input, x); cursorFields[1].setInt(Core.input, height - y); } // Повторяем обратную формулу SdlInput.handleInput, не вводя второй Retina/DPI-масштаб.
+                return true;
+            } catch (error) { Log.warn(Core.bundle.get("buildwheel.log.cursor-shift"), String(error)); return false; } // Ошибка переноса не должна мешать освобождению relative mode.
+        }
         result.warpAbsolute = function(screenX, screenY) {
             if (nativeFunctions.warp == null || !result.absoluteMode() || (nativeFunctions.valid != null && !nativeFunctions.valid())) return false; // В Cocoa не переносим указатель во время отложенного фокусного клика или замены оконного обработчика.
-            if (warpArgs == null) warpArgs = array([ofAddress.invoke(null, [new java.lang.Long(String(window))]), null, null]); // Используем только подтверждённый указатель игрового окна.
-            warpArgs[1] = new java.lang.Integer(String(screenX)); warpArgs[2] = new java.lang.Integer(String(Core.graphics.getHeight() - screenY)); // Это обратное преобразование SdlInput.handleInput для координат мыши.
-            nativeFunctions.warp.invokeWithArguments(warpArgs); return true; // Синхронизацию Java-позиции выполняет общий разовый адаптер ниже.
+            return warpPosition(screenX, screenY, true); // Обычный и относительный ввод используют одну систему координат.
         };
         function stopReleaseRetry() { if (releaseListener == null) return; var listener = releaseListener; releaseListener = null; Core.app.post(() => Core.app.removeListener(listener)); } // Удаление выполняется вне обхода слушателей приложения.
         function retryRelease() { // Дополнительный update существует только на время отложенного закрытия Cocoa.
@@ -329,15 +366,38 @@ exports.create = function() {
             releaseListener = extend(ApplicationListener, {update: function() { if (closing && !disposing) result.end(); }, resume: function() { if (closing && !disposing) result.end(); }});
             Core.app.addListener(releaseListener);
         }
-        result.end = function() { // Вызывается также при исключении между включением режима и его подтверждением.
-            if (!owned) return true;
-            var failure;
-            for (var attempt = 0; attempt < 2; attempt++) try {
-                if (nativeFunctions.endReady != null && !nativeFunctions.endReady()) { closing = true; retryRelease(); return false; } // Cocoa pending возвращает ложный успех при выключении; сохраняем владение до настоящего освобождения.
+        function cursorVisibility(value) {
+            for (var attempt = 0; attempt < 2; attempt++) try { return Number(nativeFunctions.cursor.invokeWithArguments(value == 0 ? off : value == 1 ? on : queryCursor)); } catch (error) { if (attempt == 1) Log.warn(Core.bundle.get("buildwheel.log.cursor-shift"), String(error)); } // Повтор безопасен: установка видимости идемпотентна.
+            return -1;
+        }
+        function releaseAtPoint() { // Временное скрытие существует только в пределах одного вызова, включая ошибки отключения.
+            var visible = exitPending && nativeFunctions.cursor != null ? cursorVisibility(-1) : -1;
+            if (visible == 1) cursorVisibility(0); // Сохраняем форму курсора и скрываем только короткий переход старых SDL.
+            try {
+                if (exitPending) warpPosition(exitX, exitY, false); // Сначала согласуем SDL с ограниченной визуальной точкой.
                 if (nativeFunctions.beforeEnd != null) nativeFunctions.beforeEnd();
+                releaseAttempted = true; // Не принимаем флаг SDL=false за успешный откат после ошибки Cocoa.
                 if (Number(set.invokeWithArguments(off)) != 0 || Number(mode.invokeWithArguments(none)) != 0) throw new Error(Core.bundle.get("buildwheel.sdl.release"));
                 if (nativeFunctions.checkEnd != null) nativeFunctions.checkEnd();
-                owned = false; result.active = false; closing = false; stopReleaseRetry(); return true;
+                if (exitPending) result.cursorSynced = warpPosition(exitX, exitY, true); // Cocoa 2.0.16 и старый X11 требуют завершающего переноса после отключения, в этом же вызове.
+            } finally { if (visible == 0 || visible == 1) cursorVisibility(visible); } // Видимость не остаётся изменённой между попытками или после исключения.
+            owned = false; result.active = false; closing = false; exitPending = false; stopReleaseRetry();
+            return true; // Возврат после finally обходит ошибку генерации байткода в используемом Rhino.
+        }
+        function releasedExternally() {
+            try { return !releaseAttempted && Number(mode.invokeWithArguments(none)) == 0; } catch (error) { exitPending = false; return false; } // Ошибка getter запрещает перенос, но не должна отменять попытку отключить свой режим.
+        }
+        result.end = function(screenX, screenY) { // Конечная точка необязательна: аварийное освобождение не обязано переносить мышь.
+            result.cursorSynced = false;
+            if (!owned) return true;
+            if (screenX != null || screenY != null) { exitPending = isFinite(screenX) && isFinite(screenY); exitX = Number(screenX); exitY = Number(screenY); } // Повтор отложенного закрытия без аргументов сохраняет выбранную точку.
+            var failure = null; // При полном отказе сохраняем последнюю ошибку освобождения.
+            for (var attempt = 0; attempt < 2; attempt++) try {
+                if (releasedExternally()) { owned = false; result.active = false; closing = false; exitPending = false; stopReleaseRetry(); return true; } // Если режим выключен извне, не переносим чужой указатель и не включаем его заново.
+                if (exitPending && !cursorWindowReady()) exitPending = false; // Alt+Tab и завершение приложения не возвращают мышь в старую игровую точку.
+                if (nativeFunctions.endReady != null && !nativeFunctions.endReady()) { closing = true; retryRelease(); return false; } // Cocoa pending возвращает ложный успех при выключении; сохраняем владение до настоящего освобождения.
+                if (exitPending && !canWarp()) exitPending = false; // Проверяем listener после ожидания: временный pending не должен стирать конечную точку.
+                return releaseAtPoint();
             } catch (error) { failure = error; } // Идемпотентное отключение можно повторить при единичном сбое.
             closing = false; stopReleaseRetry(); result.available = false; // После ошибки прекращаем автоматические повторы; владение и дескрипторы остаются для явного освобождения.
             var reason = String(failure); if (result.reason != reason) Log.err("BuildWheel: @", reason); result.reason = reason; return false; // Одинаковая ошибка не засоряет журнал при последующих событиях закрытия.
@@ -345,7 +405,7 @@ exports.create = function() {
         function fail(error) { result.available = false; result.reason = String(error); result.end(); Log.warn("BuildWheel SDL: @", result.reason); return false; } // Ошибка не включает старый Win32-ограничитель.
         result.begin = function() {
             if (!result.available || closing) return false;
-            try { if (!focused()) return false; if (owned) return result.active; if (Number(mode.invokeWithArguments(none)) != 0) return false; if (nativeFunctions.ready != null && !nativeFunctions.ready()) return false; if (nativeFunctions.beforeBegin != null) nativeFunctions.beforeBegin(); owned = true; result.active = true; if (Number(set.invokeWithArguments(on)) != 0 || Number(mode.invokeWithArguments(none)) != 1) throw new Error(String(SDL.SDL_GetError())); if (!nativeFunctions.allowed()) throw new Error(nativeFunctions.rejection || Core.bundle.get("buildwheel.sdl.warp-rejected")); get.invokeWithArguments(sampleArgs); return true; } // Не забираем чужой режим; active также защищает незавершённый откат от открытия обычного колеса.
+            try { if (!focused()) return false; if (owned) return result.active; if (Number(mode.invokeWithArguments(none)) != 0) return false; if (nativeFunctions.ready != null && !nativeFunctions.ready()) return false; if (nativeFunctions.beforeBegin != null) nativeFunctions.beforeBegin(); exitPending = false; releaseAttempted = false; result.cursorSynced = false; owned = true; result.active = true; if (Number(set.invokeWithArguments(on)) != 0 || Number(mode.invokeWithArguments(none)) != 1) throw new Error(String(SDL.SDL_GetError())); if (!nativeFunctions.allowed()) throw new Error(nativeFunctions.rejection || Core.bundle.get("buildwheel.sdl.warp-rejected")); get.invokeWithArguments(sampleArgs); return true; } // Не забираем чужой режим; active также защищает незавершённый откат от открытия обычного колеса.
             catch (error) { return fail(error); }
         };
         result.sample = function(out) {
@@ -354,7 +414,7 @@ exports.create = function() {
             catch (error) { return fail(error); }
         };
         result.dispose = function() { disposing = true; var released = result.end(); stopReleaseRetry(); if (released && arena != null) { close.invoke(arena, none); arena = null; } result.available = false; }; // После Dispose не опрашиваем окно; при незавершённом освобождении память остаётся до завершения процесса.
-        result.available = nativeFunctions.relativeAvailable !== false; result.reason = result.available ? "" : nativeFunctions.relativeReason; result.hash = nativeFunctions.hash; result.automatic = nativeFunctions.automatic; // Индексы PE и байты DLL после выхода не нужны обработчику движения.
+        result.available = nativeFunctions.relativeAvailable !== false && nativeFunctions.warp != null; result.reason = result.available ? "" : nativeFunctions.relativeReason || Core.bundle.get("buildwheel.sdl.unsupported"); result.hash = nativeFunctions.hash; result.automatic = nativeFunctions.automatic; // Без проверенного переноса нельзя безопасно вернуть указатель из relative mode.
         if (result.available) Log.info(Core.bundle.get("buildwheel.log.sdl-ready"), nativeFunctions.description); else Log.warn(Core.bundle.get("buildwheel.log.sdl-disabled"), result.reason);
     } catch (error) {
         result.available = false; result.active = false; result.reason = String(error); // Недоступность FFM, другая DLL или отличающийся машинный код дают безопасный отказ.

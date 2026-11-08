@@ -300,10 +300,22 @@ Events.on(ClientLoadEvent, () => {
     //==============================================================
 
     //Закрытие колеса при выходе в меню или сбросе мира.
-    function closeWheel() {
+    function closeWheel(blockSelected) {
+        var wasVirtual = virtualActive, syncCursor = false; // Запоминаем способ ввода до освобождения собственного захвата.
+        var returnToCenter = blockSelected === true && controls.returnCursorAfterSelection; // Пустой сектор, ПКМ и Escape не возвращают курсор в центр.
+        var syncPoint = wheelOpen && windowFocused && Core.scene != null && !OS.isAndroid && (wasVirtual || (!Vars.mobile && returnToCenter)); // Собственный SDL-захват завершаем согласованно даже при мобильном UI десктопа; Android пропускает перенос.
+        if (syncPoint) try {
+            if (returnToCenter) cursorPoint.set(wheel.x + wheel.getWidth() / 2, wheel.y + wheel.getHeight() / 2); // Центр берём у закрываемого колеса, включая его сдвиг от края экрана.
+            else cursorPoint.set(virtualPosition); // Сохраняем именно ограниченную видимую точку, а не координаты накопителя SDL.
+            Core.scene.getViewport().project(cursorPoint); // Координаты сцены переводим в экранные координаты Arc; Y пока направлен вверх.
+        } catch (error) { syncPoint = false; Log.warn(Core.bundle.get("buildwheel.log.cursor-shift"), String(error)); } // Недоступная сцена не должна прерывать освобождение режима.
         wheelOpen = false; // Закрытие сначала отключает обработку движения, даже если до этого был показан номер.
-        wheel.update(null); virtualActive = false; // Сначала прекращаем чтение накопителя и отображение виртуального указателя.
-        try { if (relative != null) relative.end(); } catch (error) { Log.err(Core.bundle.get("buildwheel.log.sdl-release"), String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
+        wheel.update(null); // Прекращаем чтение накопителя; его координаты больше не влияют на выбранную конечную точку.
+        try {
+            if (relative != null) { relative.end(syncPoint && wasVirtual ? cursorPoint.x : undefined, syncPoint && wasVirtual ? cursorPoint.y : undefined); syncCursor = relative.cursorSynced === true; } // Адаптер согласует точку при освобождении только собственного режима.
+            if (syncPoint && !wasVirtual) { var provider = prepareRelative(); syncCursor = provider.warpAbsolute != null && provider.warpAbsolute(cursorPoint.x, cursorPoint.y); } // Обычную мышь переносим тем же проверенным SDL без включения relative mode.
+        } catch (error) { Log.err(Core.bundle.get("buildwheel.log.sdl-release"), String(error)); } // Остальная очистка выполняется даже при ошибке адаптера.
+        virtualActive = false; // Виртуальную позицию выключаем после передачи её адаптеру.
         setMotionEnabled(false); // Убираем обработчик наведения из цепочки ввода.
         hideWheelNumber(); // Номер и временно скрытый курсор не должны оставаться после выбора, отмены или открытия окна.
         wheel.resetHoverSound(); // Повторное открытие начинает новую историю звука наведения.
@@ -311,6 +323,7 @@ Events.on(ClientLoadEvent, () => {
         wheel.visible = false;
         pendingSelection = null; // Отменяет ещё не выполненный запрос выбора.
         wheelScrollAmount = 0; // После закрытия не переносим незавершённый шаг прокрутки в следующее открытие.
+        return syncCursor; // Обработчик клика не должен заново записать в сцену старые координаты события.
     }
 
     // РАЗОВОЕ РАЗМЕЩЕНИЕ КОЛЕСА И КУРСОРА ПРИ ОТКРЫТИИ
@@ -659,7 +672,7 @@ Events.on(ClientLoadEvent, () => {
                 // 2.1) Вне кольца, в центре или на пустом слоте — отмена.
                 // 2.2) ПКМ — отмена в любом месте. После выбора также закрываем.
                 // Пустой/недоступный слот не сбрасывает прежний строительный блок.
-                closeWheel();
+                if (closeWheel(selectedBlock != null)) { screenX = Core.input.mouseX(); screenY = Core.input.mouseY(); } // После переноса наведение HUD получает фактическую конечную точку.
                 queueBlockSelection(selectedBlock);
             }
             // Исходное событие не доходит до сцены. Обновляем только её
@@ -675,12 +688,12 @@ Events.on(ClientLoadEvent, () => {
             if (settingsMenu.handleKeyUp(button)) return true;
             if (button == KeyCode.mouseLeft && capturedLeft) {
                 capturedLeft = false;
-                Core.scene.mouseMoved(screenX, screenY);
+                Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); // Координаты отпускания могли попасть в очередь до переноса курсора.
                 return true;
             }
             if (button == KeyCode.mouseRight && capturedRight) {
                 capturedRight = false;
-                Core.scene.mouseMoved(screenX, screenY);
+                Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); // После отмены используем фактическую позицию, сохранённую адаптером.
                 return true;
             }
             return false;
@@ -690,7 +703,7 @@ Events.on(ClientLoadEvent, () => {
             if (!computerInputActive()) return false;
             if (motionActive && mouseMotion(screenX, screenY)) return true; // Движение с удержанной кнопкой подчиняется той же окружности.
             if (!capturedLeft && !capturedRight) return false;
-            Core.scene.mouseMoved(screenX, screenY);
+            Core.scene.mouseMoved(Core.input.mouseX(), Core.input.mouseY()); // Завершённый жест не возвращает наведение к старой точке очереди.
             return true;
         }
     }));
