@@ -3,6 +3,8 @@
 // API: https://mindustrygame.github.io/docs/
 // Исходники: https://github.com/Anuken/Arc/tree/master/arc-core/src/arc
 
+if (OS.isIos || (Core.app != null && Core.app.isIOS())) return; // Игра оборачивает main.js в функцию; на iOS выходим до require, звуков, настроек и обработчиков.
+
 // 3) require выполняется при загрузке скрипта; само меню создаётся после ClientLoadEvent.
 var menuModule = require("menu"); // настройки
 var wheelModule = require("wheel"); // 'колесо выбора'
@@ -19,7 +21,7 @@ Events.on(ClientLoadEvent, () => {
         if (!OS.isAndroid) return true;
         var handler = Vars.control == null ? null : Vars.control.input;
         if (handler !== androidHandler) {
-            androidHandler = handler; closeWheel(); resetCapturedInput(); // Переназначенное управление не наследует старый жест или отложенный выбор.
+            androidHandler = handler; syncBlockSelection(); closeWheel(); resetCapturedInput(); // Новый обработчик получает собственные назначения без старого жеста или отложенного выбора.
             if (!(handler instanceof DesktopInput) && settingsMenu != null) settingsMenu.inputDisabled(); // Закрываем только собственные окна при возвращении к сенсорному управлению.
         }
         return handler instanceof DesktopInput;
@@ -85,7 +87,7 @@ Events.on(ClientLoadEvent, () => {
 
     function wheelFrame() { // Лёгкая проверка работает только у открытого колеса; нативный ввод читается только в relative mode.
         if (!wheelOpen) return;
-        if (!computerInputActive() || !windowFocused || !Vars.state.isGame() || wheelInputBlocked() || wantsRelative() != requestedRelative) { closeWheel(); return; } // Смена способа ввода завершает текущий захват, следующее открытие использует новые настройки.
+        if (!computerInputActive() || !windowFocused || !Vars.state.isGame() || wheelInputBlocked() || commandModeActive() || wantsRelative() != requestedRelative) { closeWheel(); return; } // Командование и смена способа ввода завершают захват; проверка работает только у открытого колеса.
         if (!virtualActive) return;
         if (!controls.customArrow && !prepareStandardCursor()) { closeWheel(); return; }
         sampleRelative();
@@ -133,7 +135,7 @@ Events.on(ClientLoadEvent, () => {
 
     function sampleRelative() { // Вызывается до выбора по клику и перед рисованием, после обработки очереди SDL.
         if (!wheelOpen || !virtualActive) return;
-        if (!windowFocused || !Vars.state.isGame() || wheelInputBlocked() || !wantsRelative()) { closeWheel(); return; } // Чужое окно, потеря фокуса и отключение режима освобождают захват даже до проверки кадра.
+        if (!windowFocused || !Vars.state.isGame() || wheelInputBlocked() || commandModeActive() || !wantsRelative()) { closeWheel(); return; } // Чужое окно, командование, потеря фокуса и отключение режима освобождают захват даже до проверки кадра.
         syncBoundary(); // Эта проверка тоже предшествует защите от повторного чтения.
         var frame = Core.graphics.getFrameId();
         if (sampleFrame == frame) return; // GetRelativeMouseState обнуляет накопитель, поэтому читаем его только один раз.
@@ -190,12 +192,12 @@ Events.on(ClientLoadEvent, () => {
         useSharedVisual: true, // Игровое колесо использует закреплённый визуал, если замок включён.
         canDraw: function() { return wheelOpen && Vars.state.isGame(); },//условия запуска
         getWheelNumber: function() { return activeWheelNumber; },//номер 'колеса выбора'
-        getIconAlpha: function(block) { // Затемнение влияет только на иконку: нехватка материалов не мешает выбрать блок для строительства.
+        getIconAlpha: function(block) { // Прозрачность влияет только на иконку: нехватка ресурсов не мешает выбрать блок для строительства.
             if (!canSelectBlock(block) || !block.isPlaceable()) return 0.30; // Недоступные в этом мире блоки остаются тусклыми независимо от настройки материалов.
             var rules = Vars.state.rules; // Используем текущие правила мира, в том числе изменённые во время игры.
-            if (!controls.dimMissingMaterials || rules.isInfiniteResources(Vars.player.team())) return 1; // При выключенной настройке или бесконечных ресурсах запасы ядра проверять не нужно.
+            if (controls.missingResourceTransparency == 0 || rules.isInfiniteResources(Vars.player.team())) return 1; // При нуле или бесконечных ресурсах проверка запасов не нужна.
             var core = Vars.player.core(); // Материалы берём из ядра команды игрока, как в строительном меню Mindustry.
-            return core != null && core.items.has(block.requirements, rules.buildCostMultiplier) ? 1 : 0.30; // Штатный метод учитывает множитель стоимости и округление; без ядра конечные ресурсы недоступны.
+            return core != null && core.items.has(block.requirements, rules.buildCostMultiplier) ? 1 : 1 - controls.missingResourceTransparency; // Штатная проверка учитывает стоимость; непрозрачность равна единице минус выбранная доля прозрачности.
         },
 
         // Открытие колеса делает областью для клика весь экран.
@@ -290,6 +292,7 @@ Events.on(ClientLoadEvent, () => {
         return false; // Неподдерживаемая платформа сохраняет обычное наведение.
     }
     Events.on(DisposeEvent, () => { // Освобождаем нативные ресурсы один раз при завершении игры.
+        selectionDisposed = true; restoreBlockSelection(); // Возвращаем только собственные подмены ссылок; чужие назначения не трогаем.
         if (androidCtrlBridge != null) androidCtrlBridge.dispose(); // AndroidInput не имеет removeKeyListener; отключаем только собственный небольшой слушатель.
         closeWheel(); // Сначала снимаем ограничение ОС и возвращаем обычный курсор.
         if (invisibleCursor != null) { invisibleCursor.dispose(); invisibleCursor = null; } // Повторное событие не должно освобождать тот же аппаратный курсор дважды.
@@ -420,16 +423,45 @@ Events.on(ClientLoadEvent, () => {
             || Core.input.keyDown(Binding.rebuildSelect);
     }
 
-    // ПЕРЕХВАТ ЦИФРОВОГО ВЫБОРА КАТЕГОРИЙ И БЛОКОВ ИГРЫ
-    var blockedNumberBindings = [Binding.blockSelect01, Binding.blockSelect02, Binding.blockSelect03, Binding.blockSelect04, Binding.blockSelect05, Binding.blockSelect06, Binding.blockSelect07, Binding.blockSelect08, Binding.blockSelect09, Binding.blockSelect10]; // Используем текущие игровые назначения, не перезаписывая их в настройках Mindustry.
+    // ОТКЛЮЧЕНИЕ ТОЛЬКО СТРОИТЕЛЬНОЙ ЦИФРОВОЙ ПОСЛЕДОВАТЕЛЬНОСТИ
+    var selectionField = null, selectionArray = null, selectionOriginals = null, selectionDisabled = null; // Массив PlacementFragment отделён от назначений групп юнитов.
+    var selectionFailed = false, selectionDisposed = false; // Неподдерживаемый API даёт разовый безопасный отказ, без перехвата клавиш.
+    function restoreBlockSelection() {
+        if (selectionArray != null) for (var i = 0; i < 10; i++) if (selectionArray[i] === selectionDisabled) selectionArray[i] = selectionOriginals[i]; // Другой мод мог заменить отдельные элементы; восстанавливаем только свои.
+        selectionArray = null; selectionOriginals = null; // Старый фрагмент больше не удерживается модом.
+    }
+    function syncBlockSelection() { // Вызывается при настройке и событиях ввода, а не каждый кадр.
+        if (selectionFailed || selectionDisposed) return;
+        var fragment = Vars.ui.hudfrag == null ? null : Vars.ui.hudfrag.blockfrag;
+        if (!controls.disableNumberKeys || fragment == null || (OS.isAndroid && !(Vars.control.input instanceof DesktopInput))) { restoreBlockSelection(); return; }
+        try {
+            if (selectionField == null) { selectionField = java.lang.Class.forName("mindustry.ui.fragments.PlacementFragment", false, fragment.getClass().getClassLoader()).getDeclaredField("blockSelect"); selectionField.setAccessible(true); } // Доступ готовится один раз, в том числе через игровой ClassLoader Android.
+            var bindings = selectionField.get(fragment);
+            if (bindings === selectionArray) return; // Переназначение клавиш не требует новой подмены: исходные KeyBind остаются теми же объектами.
+            if (bindings == null || bindings.length < 10) throw new Error("PlacementFragment.blockSelect");
+            var originals = []; // Только десять ссылок; последние четыре назначения стрелок остаются без изменений.
+            for (var i = 0; i < 10; i++) originals[i] = bindings[i] === selectionDisabled && selectionOriginals != null ? selectionOriginals[i] : bindings[i]; // Учитываем и скопированный другим модом массив с нашей подменой.
+            restoreBlockSelection(); // При замене фрагмента сначала освобождаем прежний массив.
+            if (selectionDisabled == null) {
+                var count = KeyBind.all.size;
+                try { selectionDisabled = KeyBind.add("buildwheel-internal-no-block-select", KeyCode.unset, "buildwheel"); selectionDisabled.unset(); } // Собственный неактивный KeyBind не меняет общие Binding и не сохраняется.
+                finally { if (KeyBind.all.size > count) { var added = KeyBind.all.get(count); if (String(added.name) == "buildwheel-internal-no-block-select") KeyBind.all.remove(added, true); } } // Убираем служебное действие из окна управления даже при ошибке load() в конструкторе.
+            }
+            selectionArray = bindings; selectionOriginals = originals;
+            for (var i = 0; i < 10; i++) bindings[i] = selectionDisabled; // gridUpdate видит unset; KeyboardDevice и controlGroupBindings получают настоящие нажатия.
+        } catch (error) { restoreBlockSelection(); selectionFailed = true; Log.warn(Core.bundle.get("buildwheel.log.block-selection"), String(error)); } // Несовместимость фрагмента не прерывает загрузку мода и не блокирует ввод.
+    }
+    controls.onNumberSelectionChanged = syncBlockSelection; syncBlockSelection(); // Применяем сохранённую настройку до первого игрового кадра.
     var capturedKeys = []; // Отпускание перехваченной клавиши также не передаётся игре.
     function resetCapturedInput() { capturedLeft = false; capturedRight = false; capturedKeys = []; scrollHeldKey = KeyCode.unset; wheelScrollAmount = 0; } // Потерянное вне окна отпускание не должно блокировать следующие открытия.
-    function blockNumberKey(key) { // Проверяется только в событиях нажатия, без опроса каждого кадра.
-        if (!controls.disableNumberKeys || !Vars.state.isGame() || Core.scene.hasDialog() || Core.scene.hasKeyboard()) return false; // Поля ввода и окна игры получают цифры как обычно.
-        for (var i = 0; i < blockedNumberBindings.length; i++) { // Всего десять действий; пользовательские переназначения учитываются сразу.
-            if (blockedNumberBindings[i].value.key == key) { capturedKeys[key.ordinal()] = true; return true; } // Событие не попадает в KeyboardDevice, поэтому PlacementFragment не увидит keyTap.
-        }
-        return false; // Клавиша не относится к отключённым действиям игры.
+
+    function commandModeActive() { return Vars.control != null && Vars.control.input != null && Vars.control.input.commandMode; } // Поле общее для DesktopInput, включая компьютерное управление Android.
+    function commandKeyPending(key) { // Командная клавиша могла прийти в той же очереди раньше, чем DesktopInput обновил commandMode.
+        var value = Binding.commandMode.value;
+        if (value == null || value.key == null || value.key == KeyCode.unset || (value.key != key && !(Core.settings.getBool("commandmodehold", false) ? Core.input.keyDown(Binding.commandMode) : Core.input.keyTap(Binding.commandMode)))) return false; // Удерживаемое и переключаемое командование используют разные штатные состояния клавиатуры.
+        var input = Vars.control.input;
+        if (input.block != null || input.locked()) return false; // С выбранным строительным блоком или заблокированным управлением сама игра не включает командование.
+        return Vars.player.dead() || !Vars.player.unit().type.canBoost || value.key != Binding.boost.value.key; // Shift для взлёта не запрещает сочетания колеса, когда DesktopInput игнорирует это командное назначение.
     }
 
     //==============================================================
@@ -475,7 +507,10 @@ Events.on(ClientLoadEvent, () => {
     function captureKey(key) { capturedKeys[key.ordinal()] = true; return true; } // Собственное действие поглощает и нажатие, и отпускание, чтобы игра не выполнила параллельную команду.
 
     function handleHotkey(key) { // Вызывается и клавиатурой, и кнопками мыши.
+        syncBlockSelection(); // Проверяем смену фрагмента и Android-обработчика до передачи события игре.
         if (!computerInputActive() || !windowFocused) return false; // MobileInput получает свои клавиши без перехвата; потеря фокуса также запрещает команды мода.
+        if (capturedKeys[key.ordinal()]) return true; // Повтор уже захваченного нажатия удерживаем до отпускания, чтобы игра не получила «залипшую» клавишу при смене режима.
+        if (Core.input.keyDown(key)) return false; // Повтор нажатия, которое уже получила игра, оставляем ей вместе с отпусканием; поздний модификатор не меняет владельца жеста.
         if (settingsMenu.handleKeyDown(key)) return true; // Сначала даём собственным открытым окнам обработать закрытие.
         if (settingsMenu.isRebinding()) return false; // Новую клавишу принимает штатная плашка, а не действие мода.
         if (matches(controls.bindings.paletteModifier, controls.bindings.paletteKey, key) && (!Vars.state.isMenu() || controls.paletteInMenu) && (settingsMenu.canOpenPaletteFromKey != null ? settingsMenu.canOpenPaletteFromKey() : !Core.scene.hasKeyboard() && !Core.scene.hasDialog())) { // Меню отличает фокус собственного диалога от ввода текста; чужие окна сохраняют клавишу.
@@ -487,6 +522,7 @@ Events.on(ClientLoadEvent, () => {
             if (matches(controls.bindings.menuModifier, controls.bindings.menuKey, key) && mouseGestureAllows(controls.bindings.menuModifier)) { // По умолчанию это Ctrl + минус.
                 settingsMenu.show(activeWheelNumber); return captureKey(key); // show сохранит номер до сброса activeWheelNumber в closeWheel.
             }
+            if (commandModeActive() || commandKeyPending(key)) { if (wheelOpen) closeWheel(); return false; } // Колёса уступают командованию; меню настроек и палитра сохраняют свои прежние сочетания.
             if (controls.key(controls.bindings.scrollKey) != KeyCode.unset && key == controls.key(controls.bindings.scrollKey) && mouseGestureAllows(null)) { // Прокрутка включается только после назначения основной клавиши.
                 if (scrollHeldKey == KeyCode.unset) { scrollHeldKey = key; openWheel(1); Core.input.getKeyboard().scrolled(0, 0); } // Повторное событие удержания не сбрасывает номер обратно к первому.
                 return captureKey(key); // KeyboardDevice не увидит назначенную кнопку как игровое действие.
@@ -501,7 +537,7 @@ Events.on(ClientLoadEvent, () => {
         // 2.4) Сначала закрываем колесо и пропускаем клавишу дальше в игру.
         // Это должно работать и без Shift, и при открытии меню на паузе.
         if (closeForGameAction(key)) return false; // Неназначенные модом игровые команды сохраняют прежнее закрытие колеса.
-        return blockNumberKey(key); // Отключаем только цифровой выбор категорий и блоков при включённой настройке.
+        return false; // Посторонние назначения, в том числе группы юнитов, получают событие без перехвата.
     }
     //==============================================================
 
@@ -527,7 +563,7 @@ Events.on(ClientLoadEvent, () => {
             if (pendingSelection !== selection) return;
             pendingSelection = null;
             // Пока задача ждала, мир или доступность блока могли измениться.
-            if (!computerInputActive() || (OS.isAndroid && Vars.control.input !== selection.handler) || !Vars.state.isGame() || wheelInputBlocked()
+            if (!computerInputActive() || (OS.isAndroid && Vars.control.input !== selection.handler) || !Vars.state.isGame() || wheelInputBlocked() || commandModeActive()
                 || !canSelectBlock(selection.block)) return;
 
             // 2.3) Это штатное поле выбранного строительного блока.
@@ -549,7 +585,7 @@ Events.on(ClientLoadEvent, () => {
     Events.on(ResizeEvent, () => closeWheel()); // При изменении размеров окна освобождаем режим с прежним масштабом координат.
     Core.app.addListener(extend(ApplicationListener, { // Потеря фокуса окна является отдельным событием приложения, а не покадровой проверкой.
         pause: function() { windowFocused = false; closeWheel(); resetCapturedInput(); if (androidCtrlBridge != null) androidCtrlBridge.release(); }, // Не оставляем собственный Ctrl зажатым, если он отпущен вне приложения.
-        resume: function() { windowFocused = true; } // Возобновляем реакцию на новые события после возвращения в игру.
+        resume: function() { windowFocused = true; syncBlockSelection(); } // Возобновляем ввод и проверяем актуальный строительный фрагмент.
     }));
 
     // АППАРАТНЫЙ CTRL В ANDROIDINPUT ARC
@@ -614,6 +650,7 @@ Events.on(ClientLoadEvent, () => {
         // ПЕРЕКЛЮЧЕНИЕ НОМЕРОВ ПРОКРУТКОЙ БЕЗ МАСШТАБИРОВАНИЯ КАРТЫ
         scrolled: function(amountX, amountY) { // Arc передаёт прокрутку вперёд отрицательным amountY, назад — положительным.
             if (!computerInputActive()) return false;
+            if ((wheelOpen || scrollHeldKey != KeyCode.unset) && (commandModeActive() || commandKeyPending(KeyCode.unset))) { if (wheelOpen) closeWheel(); scrollHeldKey = KeyCode.unset; wheelScrollAmount = 0; return false; } // Командование получает прокрутку; обычное колесо мыши без активного BuildWheel не требует новых проверок клавиатуры.
             if (virtualActive && scrollHeldKey == KeyCode.unset) return true; // Виртуальное колесо не передаёт прокрутку карте или чужому HUD.
             if (scrollHeldKey == KeyCode.unset || !Vars.state.isGame()) return false; // Обычную прокрутку без удержания назначенной клавиши и в главном меню не перехватываем.
             if (wheelInputBlocked()) { // Диалоги, ввод текста и выделение области сохраняют приоритет перед колесом.

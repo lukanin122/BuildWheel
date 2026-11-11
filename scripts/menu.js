@@ -17,10 +17,12 @@ exports.computerInputActive = function() { return !OS.isAndroid || (Vars.control
 exports.getControls = function() { // Создаём настройки один раз после ClientLoadEvent, без повторного чтения при открытии колеса.
     if (controlsCache != null) return controlsCache; // Возвращаем существующие числа и переключатели.
     var prefix = "buildwheel.controls."; // Общие настройки не смешиваются с визуалами отдельных номеров.
-    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, returnCursorAfterSelection: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false, wheelOpenPitch: true, dimMissingMaterials: true}; // Заводские значения настроек левой части; дополнительные режимы мыши выключены.
+    var legacyTransparency = 0.7; // Прежнее затемнение оставляло 30% непрозрачности, то есть 70% прозрачности.
+    try { if (!Core.settings.getBool(prefix + "dimMissingMaterials", true)) legacyTransparency = 0; } catch (error) {} // Старое «выключено» сохраняем; повреждённый тип не мешает загрузке и не удаляется.
+    var controls = {edgeShift: 0.8, disableNumberKeys: true, clipOuter: false, clipInner: false, returnCursorAfterSelection: false, paletteInMenu: false, showNumber: false, relativeMouse: false, customArrow: false, wheelOpenPitch: true, missingResourceTransparency: legacyTransparency}; // Заводские значения настроек левой части; старый переключатель служит только запасным значением нового слайдера.
     for (var key in controls) { // Читаем переключатели и долю сдвига только при создании набора.
         try {
-            if (key == "edgeShift") { // Единственное дробное значение задаёт отступ от краёв экрана.
+            if (key == "edgeShift" || key == "missingResourceTransparency") { // Оба слайдера хранят долю от нуля до единицы.
                 var saved = Number(Core.settings.getFloat(prefix + key, controls[key])); // Settings хранит долю числом Java Float.
                 if (isFinite(saved) && saved >= 0 && saved <= 1) controls[key] = saved; // Не применяем повреждённый диапазон.
             } else controls[key] = Core.settings.getBool(prefix + key, controls[key]); // Для переключателей используем штатное чтение Boolean.
@@ -37,13 +39,14 @@ exports.getControls = function() { // Создаём настройки один
         if (key == "numberColor") { // Палитра выбора цвета возвращает объект Color.
             controls.numberColor.set(value); // Сохраняем ссылку на существующий цвет для номера.
             Core.settings.put(prefix + key, "#" + String(controls.numberColor.toString()).substring(0, 6).toUpperCase()); // Записываем только RGB.
-        } else if (key == "edgeShift") { // Слайдер передаёт долю от нуля до единицы.
-            controls.edgeShift = value; // Геометрия открытия читает уже готовое число.
+        } else if (key == "edgeShift" || key == "missingResourceTransparency") { // Слайдер передаёт долю от нуля до единицы.
+            controls[key] = value; // Геометрия и рисование читают уже готовое число.
             Core.settings.put(prefix + key, new java.lang.Float(String(value))); // Не передаём Settings автоматически упакованный JS Double.
         } else { // Остальные параметры — логические переключатели.
             controls[key] = !!value; // Нормализуем значение к true/false.
             Core.settings.put(prefix + key, !!value); // Диск записывает существующий flushSettings при закрытии настроек.
         }
+        if (key == "disableNumberKeys" && controls.onNumberSelectionChanged != null) controls.onNumberSelectionChanged(); // Меняем ссылки строительного фрагмента сразу после переключения настройки.
     };
     var bindings = {wheels: []}; // Назначения хранятся как штатные KeyBind Mindustry и сохраняются штатным методом save.
     function binding(name, title, defaultKey) { // Добавляем только собственные действия мода, не меняя игровые назначения.
@@ -693,7 +696,7 @@ exports.create = function(api) {
         }
         var table = new Table(); // Таблица располагается сразу под списком блоков.
         table.left(); // Сохраняем общий левый край списка и подписей настроек.
-        var titles = [Core.bundle.format("buildwheel.controls.edge-shift", 100), Core.bundle.get("buildwheel.controls.disable-number-keys"), Core.bundle.get("buildwheel.controls.clip-outer"), Core.bundle.get("buildwheel.controls.clip-inner"), Core.bundle.get("buildwheel.controls.return-cursor"), Core.bundle.get("buildwheel.controls.wheel-selection"), Core.bundle.get("buildwheel.menu.radial-title"), Core.bundle.get("buildwheel.menu.palette-title"), Core.bundle.get("buildwheel.controls.palette-in-menu"), Core.bundle.get("buildwheel.controls.scroll-key"), Core.bundle.get("buildwheel.controls.show-number"), Core.bundle.get("buildwheel.controls.relative-mouse"), Core.bundle.get("buildwheel.controls.wheel-open-pitch"), Core.bundle.get("buildwheel.controls.dim-missing-materials")]; // Учитываем все подписи и наибольшую длину процента сдвига.
+        var titles = [Core.bundle.format("buildwheel.controls.edge-shift", 100), Core.bundle.get("buildwheel.controls.disable-number-keys"), Core.bundle.get("buildwheel.controls.clip-outer"), Core.bundle.get("buildwheel.controls.clip-inner"), Core.bundle.get("buildwheel.controls.return-cursor"), Core.bundle.get("buildwheel.controls.wheel-selection"), Core.bundle.get("buildwheel.menu.radial-title"), Core.bundle.get("buildwheel.menu.palette-title"), Core.bundle.get("buildwheel.controls.palette-in-menu"), Core.bundle.get("buildwheel.controls.scroll-key"), Core.bundle.get("buildwheel.controls.show-number"), Core.bundle.get("buildwheel.controls.relative-mouse"), Core.bundle.get("buildwheel.controls.wheel-open-pitch"), Core.bundle.format("buildwheel.controls.missing-resource-transparency", 100)]; // Учитываем все подписи и наибольшую длину процентов.
         var longest = 0, measure = new Label(""); // Один временный Label измеряет фактическую ширину игрового шрифта.
         for (var i = 0; i < titles.length; i++) { measure.setText(titles[i]); longest = Math.max(longest, measure.getPrefWidth() / Scl.scl()); } // Переводим измеренные пиксели в UI-единицы, как при расчёте ширины всей панели.
         var layout = {width: width - 18}; // Постоянно оставляем справа 18 UI-пикселей под полосу прокрутки.
@@ -737,7 +740,11 @@ exports.create = function(api) {
         controlToggle(relativeRow, "relativeMouse", Core.bundle.get("buildwheel.controls.relative-mouse.description")); // Основной режим не зависит от включения двух круговых ограничителей.
         controlToggle(relativeRow, "customArrow", Core.bundle.get("buildwheel.controls.custom-arrow.description")); // Выбор изображения действует и при relative mode, включённом ограничителями.
         addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.wheel-open-pitch"), "wheelOpenPitch", Core.bundle.get("buildwheel.controls.wheel-open-pitch.description")); // По умолчанию включено; у каждого номера своя высота тона звука открытия.
-        addControlToggle(table, layout, Core.bundle.get("buildwheel.controls.dim-missing-materials"), "dimMissingMaterials", null); // Последний переключатель затемняет иконки при нехватке материалов, сохраняя возможность выбора блока.
+        var transparencyRow = controlRow(table, layout, Core.bundle.format("buildwheel.controls.missing-resource-transparency", Math.round(controls.missingResourceTransparency * 100)), shiftWidth); // Последний слайдер начинается в той же колонке, что и сдвиг колеса.
+        var transparency = new Slider(0, 100, 1, false); // 0 оставляет иконку непрозрачной, 100 полностью скрывает её при нехватке ресурсов.
+        transparency.name = "buildwheel-control-missingResourceTransparency"; transparency.setValue(Math.round(controls.missingResourceTransparency * 100), false); // Восстанавливаем число без повторной записи настроек.
+        transparency.moved(value => { controls.set("missingResourceTransparency", Number(value) / 100); transparencyRow.label.setText(Core.bundle.format("buildwheel.controls.missing-resource-transparency", Math.round(value))); settingsChanged = true; }); // Настройка сразу влияет на иконки, но не на возможность выбора блока.
+        transparencyRow.table.add(transparency).width(shiftWidth).height(44); // Повторяем размер стандартного слайдера сдвига и его резерв для прокрутки.
         return table; // Форма пересоздаётся только при открытии меню или изменении разрешения.
     }
 
